@@ -6,10 +6,12 @@ All 3 sources are 100% free and require NO API keys:
 3. Freeway Bureau (高公局國道即時 CCTV): tisvcloud.freeway.gov.tw (live MJPEG stream)
 """
 
+from functools import lru_cache
+import json
 from typing import Any
 import xml.etree.ElementTree as ET
 
-from .common import fetch_bytes, fetch_json, now_taiwan_iso
+from .common import PROJECT_ROOT, fetch_bytes, fetch_json, now_taiwan_iso
 from .location import (
     compass_direction,
     format_distance,
@@ -20,8 +22,21 @@ from .location import (
 WRA_CCTV_STATION_URL = "https://fhyv.wra.gov.tw/FhyWeb/v1/Api/CCTV/WRA/Station?$format=JSON"
 MOA_LANDSLIDE_CCTV_URL = "https://data.moa.gov.tw/Service/OpenData/DataFileService.aspx?UnitId=111&IsTransData=1"
 FREEWAY_CCTV_URL = "https://tisvcloud.freeway.gov.tw/history/motc20/CCTV.xml"
+LOCAL_CCTV_CATALOG_PATH = PROJECT_ROOT / "data" / "cctv_catalog.json"
 
 STATION_CACHE_TTL = 1800  # 30 分鐘快取站點清單，點地圖瞬間回應
+
+
+@lru_cache(maxsize=1)
+def _load_local_catalog() -> dict[str, list[dict[str, Any]]]:
+    """Load bundled Taiwan 4,498-camera catalog so overseas cloud hosts never time out."""
+    if not LOCAL_CCTV_CATALOG_PATH.exists():
+        return {}
+    try:
+        data = json.loads(LOCAL_CCTV_CATALOG_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def _parse_float(v: Any) -> float | None:
@@ -156,9 +171,10 @@ def find_nearby_cctvs(
     max_m = max_distance_km * 1000.0
     limit = max(1, min(int(limit or 8), 20))
 
-    wra = _load_wra_stations()
-    landslide = _load_landslide_stations()
-    freeway = _load_freeway_stations()
+    local_cat = _load_local_catalog()
+    wra = local_cat.get("wra") or _load_wra_stations()
+    landslide = local_cat.get("landslide") or _load_landslide_stations()
+    freeway = local_cat.get("freeway") or _load_freeway_stations()
 
     def _nearest(pool: list[dict[str, Any]], cap: int) -> list[dict[str, Any]]:
         scored = []
@@ -179,12 +195,12 @@ def find_nearby_cctvs(
             )
         return out
 
-    # 兼顧多元監測類型：優先保留附近的水利署河川、崩塌地與國道攝影機
+    # 兼顧多元監測類型：確保國道即時動態串流、崩塌地與水利署河川攝影機都能呈現
     near_wra = _nearest(wra, limit)
     near_landslide = _nearest(landslide, min(3, limit))
-    near_freeway = _nearest(freeway, min(3, limit))
+    near_freeway = _nearest(freeway, min(4, limit))
 
-    combined = near_wra[:4] + near_landslide[:2] + near_freeway[:2]
+    combined = near_freeway[:3] + near_landslide[:2] + near_wra[:3]
     seen_ids = {c["id"] for c in combined}
     for extra in sorted(near_wra + near_landslide + near_freeway, key=lambda x: x["distance_meters"]):
         if len(combined) >= limit:

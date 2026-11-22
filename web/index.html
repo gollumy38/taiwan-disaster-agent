@@ -476,7 +476,8 @@
           <input id="accessPassword" type="password" placeholder="🔒 本站已啟用通關密碼，請輸入密碼" />
         </div>
         <div class="prompt-row">
-          <input id="userMessage" type="text" placeholder="可補充現場狀況（例：外面積水快到小腿，附近安全嗎？要怎麼撤離？）" />
+          <input id="userMessage" type="text" placeholder="問任何問題（例：這天氣該穿什麼？外面積水怎麼辦？避難包準備什麼？）" onkeydown="if(event.key==='Enter') runMultiAgent()" />
+          <button id="askQuickBtn" class="btn-blue" onclick="quickAskFromTop()" title="針對目前天氣／位置直接問答">💬 問助理</button>
           <button id="analyzeBtn" class="btn-primary" onclick="runMultiAgent()">🚀 多 Agent 分析</button>
         </div>
         <div id="runProgress" style="margin-top:0.55rem;"></div>
@@ -895,11 +896,15 @@
             const refreshBtn = `<button onclick="loadCctvInPopup(${JSON.stringify(cam).replace(/"/g, "&quot;")}, '${safeDomId}')">🔄 刷新</button>`;
             renderCctvImage(boxEl, ctrlEl, firstCam.latest_image, safeDomId, playBtn + refreshBtn);
           } else {
-            boxEl.textContent = data.message || "此水利署測站暫無即時畫面。";
+            boxEl.innerHTML =
+              `<div>${escapeHtml(data.message || "海外伺服器暫時無法直連水利署測站影像")}</div>` +
+              `<div style="margin-top:6px;"><a href="https://fhyv.wra.gov.tw/fhyv2/monitor/cctvTable" target="_blank" rel="noopener" style="color:#60a5fa;font-weight:700;">🔗 用您的台灣瀏覽器直接開啟水利署官方監視器</a></div>`;
             ctrlEl.innerHTML = "";
           }
         } catch (e) {
-          boxEl.textContent = "載入水利署影像失敗：" + e.message;
+          boxEl.innerHTML =
+            `<div>載入水利署影像逾時（可能因海外雲端 IP 限制）</div>` +
+            `<div style="margin-top:6px;"><a href="https://fhyv.wra.gov.tw/fhyv2/monitor/cctvTable" target="_blank" rel="noopener" style="color:#60a5fa;font-weight:700;">🔗 直接開啟水利署官方即時影像</a></div>`;
         }
         return;
       }
@@ -955,6 +960,16 @@
         return;
       }
       el.innerHTML = renderMarkdown(stageTexts[tab]);
+    }
+
+    function quickAskFromTop() {
+      const box = document.getElementById("userMessage");
+      const text = (box ? box.value : "").trim();
+      switchTab("chat");
+      if (text) {
+        box.value = "";
+        sendChatQuestion(text);
+      }
     }
 
     function renderChatPanel(isSending = false) {
