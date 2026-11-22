@@ -48,7 +48,7 @@ from .shelters import (
     find_shelters_and_route,
     load_shelters,
 )
-from .weather import get_outdoor_weather_tips
+from .weather import get_outdoor_weather_tips, get_weather_forecast
 
 __all__ = [
     "find_nearby_cctvs",
@@ -63,6 +63,7 @@ __all__ = [
     "get_ncdr_alerts",
     "get_rainfall",
     "get_outdoor_weather_tips",
+    "get_weather_forecast",
     "resolve_gps_location",
     "get_evacuation_route",
     "find_nearest_shelters",

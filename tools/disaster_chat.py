@@ -13,11 +13,40 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+from .common import now_taiwan
+from .weather import WEEKDAY_ZH, get_weather_forecast
+
 FALLBACK_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-2.5-flash-lite",
     "gemini-3.5-flash",
 ]
+
+FORECAST_KEYWORDS = (
+    "明天", "後天", "大後天", "下週", "下周", "這週", "這周", "本週", "本周",
+    "週末", "周末", "禮拜", "星期", "未來", "預報", "一週", "一周", "幾天",
+    "會不會下雨", "會下雨嗎", "會變冷", "變冷", "冷氣團", "天氣如何", "天氣怎麼樣",
+)
+
+UNSUPPORTED_REALTIME_TOPICS: list[tuple[tuple[str, ...], str]] = [
+    (
+        ("停班", "停課", "颱風假", "上班上課"),
+        "📢 本系統**尚未串接即時停班停課資料**（為避免誤導，我不做臆測）。\n"
+        "請直接查詢官方權威網站：\n"
+        "• 行政院人事行政總處《天然災害停止上班及上課情形》：https://www.dgpa.gov.tw/typh/daily/nds.html",
+    ),
+    (
+        ("哪裡停電", "停電查詢", "復電", "停水查詢", "哪裡停水"),
+        "📢 本系統**尚未串接即時停電／停水區域清單**（為避免誤導，我不做臆測）。\n"
+        "請直接透過官方管道查詢或通報：\n"
+        "• 台電停電查詢／報修專線：**1911**（或台灣電力 APP）\n"
+        "• 台水停水公告／客服專線：**1910**（https://wateroff.water.gov.tw）",
+    ),
+]
+
+
+def is_forecast_question(text: str) -> bool:
+    return any(k in (text or "") for k in FORECAST_KEYWORDS)
 
 # 當雲端免費額度暫時用完時的台灣防災知識庫備援（依關鍵字命中）
 OFFLINE_KNOWLEDGE: list[tuple[tuple[str, ...], str]] = [
@@ -93,14 +122,38 @@ def _get_models() -> list[str]:
     return models
 
 
-def _offline_kb_answer(question: str, context_summary: str) -> str:
+def _format_forecast_table(fc: dict[str, Any]) -> str:
+    daily = fc.get("daily") or []
+    if not daily:
+        return ""
+    lines = [
+        f"📅 **未來天氣預報（{fc.get('place', '')}｜{fc.get('coverage_start')} ～ {fc.get('coverage_end')}）**"
+    ]
+    for d in daily:
+        rain = f"｜預估雨量 {d['預估累積雨量_mm']}mm" if d.get("預估累積雨量_mm", 0) > 0 else "｜無明顯降雨"
+        lines.append(
+            f"- {d['日期']}：{d['天氣']}，{d['最低溫_C']}～{d['最高溫_C']}°C{rain}"
+        )
+    lines.append(f"資料來源：{fc.get('source', '')}")
+    return "\n".join(lines)
+
+
+def _offline_kb_answer(question: str, context_summary: str, forecast_block: str = "") -> str:
+    if forecast_block:
+        return forecast_block + "\n\n*(註：超過上述涵蓋日期的更長期天氣無法準確預測，請屆時參考中央氣象署官網 cwa.gov.tw。)*"
+
+    for keywords, answer in UNSUPPORTED_REALTIME_TOPICS:
+        if any(k in question for k in keywords):
+            return answer
+
     for keywords, answer in OFFLINE_KNOWLEDGE:
         if any(k in question for k in keywords):
             extra = f"\n\n📍 **你目前紀錄的位置資訊**：\n{context_summary}" if context_summary else ""
             return answer + extra
 
     base = (
-        "🛡️ 我是台灣防災多 Agent 助理！你可以問我任何防災與應變問題，例如：\n"
+        "🛡️ 我是台灣防災多 Agent 助理！你可以問我任何防災與天氣問題，例如：\n"
+        "• 📅 明天或下週天氣如何？（提供真實未來 7～9 天數值預報）\n"
         "• 🎒 緊急避難包要準備什麼？\n"
         "• 🌍 地震來了怎麼保命？\n"
         "• 🌊 淹水時可以進地下室牽車或開車嗎？\n"
@@ -117,15 +170,47 @@ def answer_disaster_question(
     question: str,
     context_summary: str = "",
     history: list[dict[str, str]] | None = None,
+    latitude: float = 0.0,
+    longitude: float = 0.0,
+    place: str = "",
+    scenario_id: str = "",
 ) -> dict[str, Any]:
-    """Answer general Taiwan disaster/safety/follow-up questions with multi-model & offline fallback."""
+    """Answer general Taiwan disaster/weather/follow-up questions with strict anti-hallucination guardrails."""
     q = (question or "").strip()
     if not q:
         return {"status": "ok", "reply": _offline_kb_answer("", context_summary), "model": "offline_kb"}
 
+    # 1. 對明確未串接的即時官方公告直接給誠實答覆，零幻覺！
+    for keywords, fixed_reply in UNSUPPORTED_REALTIME_TOPICS:
+        if any(k in q for k in keywords):
+            return {"status": "ok", "reply": fixed_reply, "model": "guardrail_direct"}
+
+    now_dt = now_taiwan()
+    today_str = f"{now_dt.strftime('%Y-%m-%d')}（星期{WEEKDAY_ZH[now_dt.weekday()]}）{now_dt.strftime('%H:%M')} UTC+8"
+
+    # 2. 若詢問未來天氣／明天／下週，自動撈取真實 9 天數值預報（絕不讓 LLM 瞎編！）
+    forecast_block = ""
+    forecast_warning = ""
+    if is_forecast_question(q):
+        if scenario_id:
+            forecast_warning = "使用者目前處於歷史災難演練模式，無法查真實未來預報；請提醒他切回「即時模式」再查未來一週天氣，嚴禁編造。"
+        else:
+            fc = get_weather_forecast(latitude=latitude, longitude=longitude, place=place, days=9)
+            if fc.get("status") == "ok" and fc.get("daily"):
+                forecast_block = _format_forecast_table(fc)
+            else:
+                forecast_warning = (
+                    f"【重要限制】目前無法取得未來天氣預報資料（原因：{fc.get('message') or '查無座標或連線失敗'}）。"
+                    "你絕對不可以編造任何未來日期的溫度、天氣或降雨機率！請誠實告知暫時無法查到，並引導使用者指定台灣縣市／GPS 或前往中央氣象署官網 (cwa.gov.tw)。"
+                )
+
     api_key = os.getenv("GOOGLE_API_KEY", "").strip()
     if not api_key:
-        return {"status": "ok", "reply": _offline_kb_answer(q, context_summary), "model": "offline_kb"}
+        return {
+            "status": "ok",
+            "reply": _offline_kb_answer(q, context_summary, forecast_block=forecast_block),
+            "model": "offline_kb",
+        }
 
     history_lines = []
     for turn in (history or [])[-6:]:
@@ -134,12 +219,17 @@ def answer_disaster_question(
     history_block = "\n".join(history_lines)
 
     prompt = (
-        "你是親切、專業且務實的「台灣防災與日常安全助理」。\n"
-        "回答原則：\n"
-        "1. 使用繁體中文、條列清晰、句子簡短好讀（適合手機閱讀，盡量控制在 250~400 字內）。\n"
-        "2. 符合台灣防災實務（例如：地震『趴下、掩護、穩住』、淹水勿進地下室牽車與勿闖地下道、土石流黃紅警戒定義、119／110／1911／1910 專線、中央氣象署與水利署標準）。\n"
-        "3. 若下方提供了「使用者目前位置與最近查詢背景」，請自然結合該背景回答追問（例如回答該避難所資訊、是否該出門、當地天氣穿著等）；但絕對不要捏造沒查過的即時災情數據！若使用者問到另一個新地點的即時災情，請引導他直接輸入該台灣縣市鄉鎮或分享位置。\n"
-        "4. 若話題涉及緊急生命危險，結尾提醒撥打 119；若是一般日常天氣或防範知識，語氣友善自然即可。\n\n"
+        "你是親切、專業且「絕對誠實、零幻覺」的台灣防災與氣象助理。\n"
+        f"現在真實台灣時間：{today_str}\n\n"
+        "【嚴格反幻覺鐵律（最高優先級，違反即嚴重錯誤）】：\n"
+        "1. 只能根據下方【已查獲的真實背景／預報數據】回答任何數字（氣溫、雨量、風速、日期、警戒等級、距離）。\n"
+        "2. 絕對不可以憑空編造或猜測任何沒有出現在下方數據裡的未來天氣、降雨機率、颱風路徑、地震預測、停班停課、停電或停水名單！\n"
+        "3. 若使用者問的時間超出【已查獲的真實未來天氣預報】涵蓋的最後日期（例如問兩週後、下個月、明年天氣），必須明確說明預報僅涵蓋上述日期範圍，更長期無法準確預測，請屆時查中央氣象署官網 (cwa.gov.tw)。\n"
+        "4. 若未提供預報數據且使用者問未來天氣，必須誠實說「目前沒有查到該地點／該時間的預報資料」，切勿自己編造。\n"
+        "5. 回答未來天氣時，請清楚對照「現在真實台灣時間」推算明天／週末／下週對應的真實日期，並註明資料來源。\n"
+        "6. 使用繁體中文、條列清晰、簡短好讀（約 200~400 字）；涉及立即生命危險時結尾提醒撥打 119。\n\n"
+        + (f"【已查獲的真實未來天氣預報】\n{forecast_block}\n\n" if forecast_block else "")
+        + (f"{forecast_warning}\n\n" if forecast_warning else "")
         + (f"【使用者目前位置與最近查詢背景】\n{context_summary}\n\n" if context_summary else "")
         + (f"【先前對話紀錄】\n{history_block}\n\n" if history_block else "")
         + f"【使用者最新提問】\n{q}"
@@ -151,7 +241,7 @@ def answer_disaster_question(
             resp = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.3),
+                config=types.GenerateContentConfig(temperature=0.1),
             )
             text = (resp.text or "").strip()
             if text:
@@ -161,6 +251,6 @@ def answer_disaster_question(
 
     return {
         "status": "ok",
-        "reply": _offline_kb_answer(q, context_summary),
+        "reply": _offline_kb_answer(q, context_summary, forecast_block=forecast_block),
         "model": "offline_kb_fallback",
     }

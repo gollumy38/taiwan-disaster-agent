@@ -7,12 +7,16 @@ Fallback source:
 - Open-Meteo public forecast API (when S3 is unreachable).
 """
 
+from collections import defaultdict
+from datetime import datetime, timedelta
 import math
 from typing import Any, Optional
 import xml.etree.ElementTree as ET
 
-from .common import fetch_bytes, fetch_json, now_taiwan_iso
-from .location import format_distance, haversine_meters, normalize_taiwan_coords
+import requests
+
+from .common import TAIWAN_TZ, fetch_bytes, fetch_json, now_taiwan_iso, parse_iso_datetime
+from .location import FALLBACK_TOWNSHIPS, format_distance, haversine_meters, normalize_taiwan_coords
 from .scenarios import get_active_scenario
 
 try:
@@ -376,3 +380,191 @@ def get_outdoor_weather_tips(
         "error": " | ".join(errors),
         "outdoor_tips": [],
     }
+
+
+WEEKDAY_ZH = ["一", "二", "三", "四", "五", "六", "日"]
+
+
+def _met_symbol_to_zh(symbol: str) -> str:
+    s = (symbol or "").lower()
+    if "thunder" in s:
+        return "雷雨"
+    if "heavyrain" in s:
+        return "大雨"
+    if "lightrain" in s:
+        return "小雨"
+    if "rainshowers" in s:
+        return "陣雨"
+    if "rain" in s:
+        return "有雨"
+    if "fog" in s:
+        return "有霧"
+    if "clearsky" in s:
+        return "晴朗"
+    if "fair" in s:
+        return "晴時多雲"
+    if "partlycloudy" in s:
+        return "多雲時晴"
+    if "cloudy" in s:
+        return "陰天多雲"
+    return "多雲"
+
+
+def _resolve_forecast_coords(latitude: float, longitude: float, place: str) -> tuple[float, float, str]:
+    if latitude and longitude and abs(latitude) > 1 and abs(longitude) > 1:
+        lat, lon, _ = normalize_taiwan_coords(float(latitude), float(longitude))
+        return lat, lon, place
+    cleaned = (place or "").replace("台", "臺").strip()
+    if cleaned:
+        for county, town, lat, lon in FALLBACK_TOWNSHIPS:
+            if town in cleaned or county in cleaned or county[:2] in cleaned:
+                return lat, lon, place or f"{county}{town}"
+    # 沒有提供地點時不臆測，回傳 0,0 讓呼叫端決定
+    return 0.0, 0.0, place
+
+
+_forecast_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def get_weather_forecast(
+    latitude: float = 0.0,
+    longitude: float = 0.0,
+    place: str = "",
+    days: int = 8,
+    tool_context: Optional[ToolContext] = None,
+) -> dict[str, Any]:
+    """查詢台灣未來 7~9 天真實數值天氣預報（挪威氣象局 MET Norway 全球預報，免金鑰、不限流）。
+
+    Args:
+        latitude: GPS 緯度。
+        longitude: GPS 經度。
+        place: 選填，台灣縣市或鄉鎮名稱（無 GPS 時自動對應代表座標）。
+        days: 查詢天數（預設 8 天，涵蓋本週與下週初）。
+
+    Returns:
+        包含每日真實最高／最低溫、預估累積雨量、風速與天氣狀況的字典。
+    """
+    scenario = get_active_scenario(tool_context)
+    if scenario is not None:
+        return {
+            "status": "simulation",
+            "source": f"[歷史演練快照] {scenario.get('title', '')}",
+            "message": "目前處於歷史災難演練模式，不提供真實未來一週預報；切回即時模式即可查詢未來天氣。",
+            "daily": [],
+        }
+
+    lat, lon, resolved_place = _resolve_forecast_coords(latitude, longitude, place)
+    queried_at = now_taiwan_iso()
+    if not (lat and lon):
+        return {
+            "status": "unavailable",
+            "source": "MET Norway 全球數值天氣預報",
+            "queried_at": queried_at,
+            "message": "尚未提供查詢縣市或 GPS 座標，無法取得未來天氣預報。",
+            "daily": [],
+        }
+
+    cache_key = f"{lat:.2f},{lon:.2f}"
+    import time as _time
+    cached = _forecast_cache.get(cache_key)
+    if cached and (_time.monotonic() - cached[0]) < 1800:
+        return cached[1]
+
+    try:
+        url = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={lat:.4f}&lon={lon:.4f}"
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={
+                "User-Agent": "taiwan-disaster-agent/0.5 (https://github.com/gollumy38/taiwan-disaster-agent)"
+            },
+        )
+        resp.raise_for_status()
+        raw = resp.json()
+        timeseries = raw.get("properties", {}).get("timeseries") or []
+
+        by_date: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {"temps": [], "rain_mm": 0.0, "winds": [], "symbols": []}
+        )
+        for item in timeseries:
+            dt = parse_iso_datetime(item.get("time", ""))
+            if dt is None:
+                continue
+            local_dt = dt.astimezone(TAIWAN_TZ)
+            day_key = local_dt.strftime("%Y-%m-%d")
+            inst = item.get("data", {}).get("instant", {}).get("details", {})
+            temp = inst.get("air_temperature")
+            ws = inst.get("wind_speed")
+            if isinstance(temp, (int, float)):
+                by_date[day_key]["temps"].append(float(temp))
+            if isinstance(ws, (int, float)):
+                by_date[day_key]["winds"].append(float(ws) * 3.6)
+
+            # 取 1h 或 6h 降雨量與天氣符號（避免重複加總，以 1h 優先，無 1h 才取 6h）
+            dnode = item.get("data", {})
+            n1 = dnode.get("next_1_hours")
+            n6 = dnode.get("next_6_hours")
+            if n1:
+                amt = (n1.get("details") or {}).get("precipitation_amount")
+                if isinstance(amt, (int, float)):
+                    by_date[day_key]["rain_mm"] += float(amt)
+                sym = (n1.get("summary") or {}).get("symbol_code")
+                if sym:
+                    by_date[day_key]["symbols"].append(sym)
+            elif n6:
+                amt = (n6.get("details") or {}).get("precipitation_amount")
+                if isinstance(amt, (int, float)):
+                    by_date[day_key]["rain_mm"] += float(amt)
+                sym = (n6.get("summary") or {}).get("symbol_code")
+                if sym:
+                    by_date[day_key]["symbols"].append(sym)
+
+        daily: list[dict[str, Any]] = []
+        for day_key in sorted(by_date.keys())[: max(1, min(days, 10))]:
+            bucket = by_date[day_key]
+            if not bucket["temps"]:
+                continue
+            dt_obj = datetime.strptime(day_key, "%Y-%m-%d")
+            wday = WEEKDAY_ZH[dt_obj.weekday()]
+            # 挑最具代表性（有雨優先，否則取最常出現）的天氣描述
+            zh_syms = [_met_symbol_to_zh(s) for s in bucket["symbols"]]
+            rain_syms = [z for z in zh_syms if "雨" in z]
+            if rain_syms and bucket["rain_mm"] >= 0.5:
+                cond = max(set(rain_syms), key=rain_syms.count)
+            elif zh_syms:
+                cond = max(set(zh_syms), key=zh_syms.count)
+            else:
+                cond = "多雲"
+
+            daily.append(
+                {
+                    "日期": f"{day_key} ({wday})",
+                    "天氣": cond,
+                    "最低溫_C": round(min(bucket["temps"]), 1),
+                    "最高溫_C": round(max(bucket["temps"]), 1),
+                    "預估累積雨量_mm": round(bucket["rain_mm"], 1),
+                    "最大風速_kmh": round(max(bucket["winds"]), 1) if bucket["winds"] else None,
+                }
+            )
+
+        result = {
+            "status": "ok" if daily else "unavailable",
+            "mode": "live",
+            "source": "挪威氣象局 MET Norway 全球數值天氣預報（實際台灣天氣請以中央氣象署最新預報為準）",
+            "queried_at": queried_at,
+            "place": resolved_place or f"{lat:.4f}, {lon:.4f}",
+            "coverage_start": daily[0]["日期"] if daily else "",
+            "coverage_end": daily[-1]["日期"] if daily else "",
+            "daily": daily,
+        }
+        _forecast_cache[cache_key] = (_time.monotonic(), result)
+        return result
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "mode": "live",
+            "source": "MET Norway 全球數值天氣預報",
+            "queried_at": queried_at,
+            "message": f"暫時無法取得未來天氣預報資料（{e}）。",
+            "daily": [],
+        }

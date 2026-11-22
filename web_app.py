@@ -54,6 +54,7 @@ from tools import (
     run_patrol_cycle,
     verify_line_signature,
 )
+from tools.disaster_chat import is_forecast_question
 from tools.notifications import ALERTS_LOG_PATH
 from tools.scenarios import LIVE_OVERRIDE, STATE_KEY
 
@@ -411,9 +412,9 @@ async def api_chat(req: ChatRequest, request: Request):
     if not q:
         raise HTTPException(status_code=400, detail="請輸入問題。")
 
-    # 若使用者在聊天窗直接問某個台灣新地點的即時災情，自動帶入三階段多 Agent 查詢
+    # 若使用者問的是「未來天氣／下週天氣」（就算帶了縣市名），直接走真實 9 天預報問答，絕不幻覺
     lat_in, lon_in, place_in = _extract_gps_and_place(q)
-    if place_in or (lat_in and lon_in):
+    if not is_forecast_question(q) and (place_in or (lat_in and lon_in)):
         res = await _run_pipeline_for_line(q, req.scenario_id)
         if res.get("final_reply"):
             return {
@@ -424,10 +425,13 @@ async def api_chat(req: ChatRequest, request: Request):
             }
 
     ctx_parts: list[str] = []
-    if req.place:
-        ctx_parts.append(f"目前地圖位置：{req.place}")
-    if req.latitude and req.longitude:
-        ctx_parts.append(f"GPS：{req.latitude:.5f}, {req.longitude:.5f}")
+    target_place = place_in or req.place
+    target_lat = lat_in if (lat_in and lon_in) else (0.0 if place_in else req.latitude)
+    target_lon = lon_in if (lat_in and lon_in) else (0.0 if place_in else req.longitude)
+    if target_place:
+        ctx_parts.append(f"查詢地點：{target_place}")
+    if target_lat and target_lon:
+        ctx_parts.append(f"GPS：{target_lat:.5f}, {target_lon:.5f}")
     if req.scenario_id:
         ctx_parts.append(f"目前處於歷史演練模式：{req.scenario_id}")
     if req.context_summary:
@@ -438,6 +442,10 @@ async def api_chat(req: ChatRequest, request: Request):
         q,
         "\n".join(ctx_parts),
         req.history,
+        target_lat,
+        target_lon,
+        target_place,
+        req.scenario_id,
     )
     return {
         "status": "ok",
@@ -833,14 +841,21 @@ async def _handle_line_event(event: dict[str, Any]) -> None:
                 )
                 return
 
-            # 判斷是否包含台灣地名／GPS：有則跑三階段官方災情流水線，無則進入自由防災問答對話！
+            # 判斷是否為未來天氣預報提問或無地點一般問答 → 走防幻覺真實預報／防災問答！
             lat_in, lon_in, place_in = _extract_gps_and_place(text)
-            if not place_in and not (lat_in and lon_in):
+            if is_forecast_question(text) or (not place_in and not (lat_in and lon_in)):
+                target_place = place_in or str(prefs.get("last_place") or "")
+                target_lat = lat_in if (lat_in and lon_in) else (0.0 if place_in else float(prefs.get("last_lat") or 0.0))
+                target_lon = lon_in if (lat_in and lon_in) else (0.0 if place_in else float(prefs.get("last_lon") or 0.0))
                 ans = await asyncio.to_thread(
                     answer_disaster_question,
                     text,
                     str(prefs.get("last_context") or ""),
                     prefs.get("history") or [],
+                    target_lat,
+                    target_lon,
+                    target_place,
+                    scenario_id,
                 )
                 reply_txt = ans["reply"][:1900]
                 hist = prefs.setdefault("history", [])

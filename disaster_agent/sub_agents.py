@@ -24,9 +24,13 @@ from google.genai import types
 from tools import (
     collect_location_hazards,
     find_shelters_and_route,
+    get_weather_forecast,
     grade_hazards,
     send_evacuation_alert,
 )
+from tools.common import now_taiwan
+from tools.disaster_chat import _format_forecast_table, is_forecast_question
+from tools.weather import WEEKDAY_ZH
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
@@ -383,12 +387,16 @@ def _try_llm_polish(
     if not api_key:
         return None, "未設定 GOOGLE_API_KEY，已使用高可靠規則引擎產出完整指引。"
 
+    now_dt = now_taiwan()
+    today_str = f"{now_dt.strftime('%Y-%m-%d')}（星期{WEEKDAY_ZH[now_dt.weekday()]}）{now_dt.strftime('%H:%M')} UTC+8"
     client = genai.Client(api_key=api_key)
     prompt = (
         "你是台灣的防災與日常天氣安全專家。下方已經由官方資料監測、風險規則引擎、全台避難所系統與自動告警系統產出完整事實與指引。\n"
-        "請**最優先、直接具體地回答【使用者提問】**（例如使用者問「這天氣該穿什麼」「要帶傘嗎」「安全嗎」「避難包準備什麼」，第一段就要直接正面回答！），"
+        f"現在真實台灣時間：{today_str}\n"
+        "【嚴格反幻覺原則】：只能使用下方已查獲的真實數據回答！如果使用者問到下方數據中沒有涵蓋的未來日期天氣、停班停課、停電停水名單或地震預測，**嚴禁自行編造**，必須誠實說明未查獲或超出預報範圍。\n"
+        "請**最優先、直接具體地回答【使用者提問】**（例如使用者問「這天氣該穿什麼」「下週天氣如何」「要帶傘嗎」「安全嗎」），"
         "再保留**所有關鍵數據、演練模式標示（若有）、自動告警編號、日常戶外與穿著提示、避難所名稱地址電話、逐步街道指引、Google Maps 導航連結（保持 Markdown 超連結格式）、封閉路段與 119 提醒**，"
-        "整理成最清楚、有同理心、可直接照做的繁體中文回覆，絕對不要捏造任何額外數據。\n\n"
+        "整理成最清楚、有同理心、可直接照做的繁體中文回覆。\n\n"
         f"【使用者提問】\n{user_text}\n\n"
         f"【監測與風險摘要】\n{risk_assessment}\n\n"
         f"【已驗證避難規劃與自動告警事實】\n{deterministic_briefing}"
@@ -400,7 +408,7 @@ def _try_llm_polish(
             resp = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.2),
+                config=types.GenerateContentConfig(temperature=0.1),
             )
             text = (resp.text or "").strip()
             if text:
@@ -488,6 +496,12 @@ class EvacuationPlannerAgent(BaseAgent):
             shelters_bundle=shelters_bundle,
             alert_res=alert_res,
         )
+        # 若使用者在分析框也順便問了明天／下週天氣，補抓真實 9 天預報避免幻覺
+        if is_forecast_question(user_text) and bundle.get("mode") != "simulation":
+            fc = await asyncio.to_thread(get_weather_forecast, lat, lon, place, 9)
+            fc_table = _format_forecast_table(fc) if fc.get("status") == "ok" else ""
+            if fc_table:
+                base_briefing = fc_table + "\n\n" + base_briefing
 
         # 僅用 1 次 LLM 呼叫潤飾，若達 429/503 自動無縫降級為高可靠規則引擎回覆
         polished, note_or_model = await asyncio.to_thread(
