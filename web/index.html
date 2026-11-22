@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>台灣防災多 Agent — GPS 即時避難導航地圖</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --blue: #3b82f6;
+      --green: #10b981;
+      --amber: #f59e0b;
+      --orange: #f97316;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      background: #0b1220;
+      border-bottom: 1px solid var(--border);
+      padding: 0.65rem 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      z-index: 1000;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-weight: 700;
+      font-size: 1.05rem;
+    }
+    .proactive-toast {
+      display: none;
+      background: linear-gradient(90deg, rgba(220,38,38,0.94), rgba(185,28,28,0.94));
+      color: #fff;
+      padding: 0.6rem 1rem;
+      font-size: 0.86rem;
+      border-bottom: 1px solid #fca5a5;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      z-index: 950;
+    }
+    .proactive-toast a { color: #fde68a; font-weight: 700; }
+    .sub-form {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.45rem;
+      margin-bottom: 0.65rem;
+    }
+    .sub-form input.full { grid-column: 1 / -1; }
+    .sub-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+      margin-bottom: 0.65rem;
+    }
+    .badge-CRITICAL { background: #991b1b; color: #fecaca; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.74rem; }
+    .badge-HIGH { background: #9a3412; color: #fed7aa; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.74rem; }
+    .badge-MEDIUM { background: #854d0e; color: #fef08a; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.74rem; }
+    .badge-LOW { background: #065f46; color: #a7f3d0; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.74rem; }
+    .pill {
+      font-size: 0.78rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: #cbd5e1;
+      font-weight: 500;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    select, input, button {
+      font-family: inherit;
+      font-size: 0.88rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    select, input {
+      background: var(--card);
+      color: var(--text);
+      padding: 0.42rem 0.65rem;
+    }
+    button {
+      cursor: pointer;
+      padding: 0.45rem 0.85rem;
+      background: var(--card);
+      color: var(--text);
+      font-weight: 600;
+      transition: transform 0.08s ease, opacity 0.15s ease;
+    }
+    button:hover { opacity: 0.9; }
+    button:active { transform: scale(0.98); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--red); border-color: var(--red); color: #fff; }
+    .btn-blue { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .btn-amber { background: #b45309; border-color: #d97706; color: #fff; }
+
+    .layout {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 0.92fr 1.18fr;
+      min-height: 0;
+    }
+    .left-col {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: 0.85rem 0.9rem;
+      gap: 0.75rem;
+      border-right: 1px solid var(--border);
+      background: #0d1526;
+    }
+    .weather-card {
+      background: linear-gradient(135deg, rgba(30, 58, 138, 0.38), rgba(15, 23, 42, 0.92));
+      border: 1px solid #2563eb;
+      border-radius: 12px;
+      padding: 0.8rem 0.95rem;
+      flex-shrink: 0;
+    }
+    .weather-card.sim {
+      background: linear-gradient(135deg, rgba(153, 27, 27, 0.42), rgba(15, 23, 42, 0.92));
+      border-color: #ef4444;
+    }
+    .weather-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.35rem;
+    }
+    .weather-title { font-size: 0.92rem; font-weight: 700; color: #e0f2fe; }
+    .weather-headline { font-size: 0.96rem; font-weight: 700; color: #93c5fd; margin-bottom: 0.3rem; }
+    .weather-card.sim .weather-headline { color: #fca5a5; }
+    .weather-tip-item { font-size: 0.82rem; color: #dbeafe; line-height: 1.5; margin-top: 0.2rem; }
+    .weather-card.sim .weather-tip-item { color: #fee2e2; }
+    @media (max-width: 960px) {
+      body { height: auto; overflow: auto; }
+      .layout { grid-template-columns: 1fr; }
+      .left-col { border-right: none; border-bottom: 1px solid var(--border); }
+      #mapWrap { height: 42vh; min-height: 280px; }
+    }
+
+    #mapWrap {
+      position: relative;
+      flex: 1;
+      min-height: 260px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    #map { width: 100%; height: 100%; }
+    .map-hint {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      z-index: 600;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--border);
+      padding: 0.45rem 0.75rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      color: #cbd5e1;
+      pointer-events: none;
+    }
+    .legend {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 600;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.7rem;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      line-height: 1.6;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0.9rem 1rem 1.5rem;
+      gap: 0.85rem;
+      background: var(--panel);
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+    }
+    .card h3 {
+      margin: 0 0 0.5rem;
+      font-size: 0.96rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .gps-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+      margin-bottom: 0.55rem;
+    }
+    .gps-readout {
+      font-size: 0.85rem;
+      color: #cbd5e1;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.45rem 0.65rem;
+      width: 100%;
+    }
+    .prompt-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.55rem;
+    }
+    .prompt-row input { flex: 1; }
+
+    .risk-banner {
+      display: none;
+      border-radius: 10px;
+      padding: 0.75rem 0.95rem;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .risk-CRITICAL { background: rgba(239, 68, 68, 0.2); border-color: var(--red); color: #fecaca; }
+    .risk-HIGH { background: rgba(249, 115, 22, 0.2); border-color: var(--orange); color: #fed7aa; }
+    .risk-MEDIUM { background: rgba(245, 158, 11, 0.2); border-color: var(--amber); color: #fde68a; }
+    .risk-LOW { background: rgba(16, 185, 129, 0.18); border-color: var(--green); color: #a7f3d0; }
+
+    .alert-box {
+      display: none;
+      margin-top: 0.6rem;
+      background: rgba(220, 38, 38, 0.16);
+      border: 1px solid #f87171;
+      border-radius: 10px;
+      padding: 0.65rem 0.85rem;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+
+    .shelter-item {
+      border: 1px solid var(--border);
+      background: #0f172a;
+      border-radius: 9px;
+      padding: 0.6rem 0.75rem;
+      margin-top: 0.45rem;
+      font-size: 0.84rem;
+    }
+    .shelter-item.top { border-color: var(--green); }
+    .shelter-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 0.5rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .shelter-meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.2rem; }
+    .nav-links { margin-top: 0.4rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .nav-links a {
+      color: #93c5fd;
+      text-decoration: none;
+      font-size: 0.8rem;
+      background: #1e293b;
+      border: 1px solid #334155;
+      padding: 0.2rem 0.55rem;
+      border-radius: 6px;
+    }
+    .nav-links a:hover { background: #2563eb; color: #fff; }
+
+    .tabs {
+      display: flex;
+      gap: 0.35rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.45rem;
+      margin-bottom: 0.65rem;
+      flex-wrap: wrap;
+    }
+    .tab {
+      font-size: 0.8rem;
+      padding: 0.3rem 0.65rem;
+      border-radius: 6px;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .tab.active {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+    .md-body {
+      font-size: 0.88rem;
+      line-height: 1.65;
+      color: #e2e8f0;
+      word-break: break-word;
+    }
+    .md-body h3, .md-body h4 { margin: 0.75rem 0 0.35rem; color: #fff; }
+    .md-body ul { margin: 0.3rem 0; padding-left: 1.25rem; }
+    .md-body li { margin: 0.2rem 0; }
+    .md-body a { color: #60a5fa; }
+    .md-body hr { border: 0; border-top: 1px solid var(--border); margin: 0.65rem 0; }
+    .md-body code { background: #0f172a; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.82rem; }
+    .loading {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #93c5fd;
+      font-size: 0.88rem;
+    }
+    .spinner {
+      width: 15px; height: 15px;
+      border: 2px solid #334155;
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .custom-pin {
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%; font-weight: 700; color: #fff;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+      border: 2px solid #fff;
+    }
+    .cctv-viewer { width: 280px; font-family: inherit; }
+    .cctv-frame-wrap {
+      margin-top: 6px;
+      background: #0f172a;
+      border-radius: 8px;
+      overflow: hidden;
+      min-height: 155px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #94a3b8;
+      font-size: 12px;
+      text-align: center;
+      padding: 4px;
+    }
+    .cctv-frame-wrap img {
+      width: 100%;
+      max-height: 200px;
+      object-fit: cover;
+      border-radius: 6px;
+      display: block;
+    }
+    .cctv-controls {
+      margin-top: 6px;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .cctv-controls button {
+      padding: 3px 8px;
+      font-size: 12px;
+      border-radius: 6px;
+      background: #1e293b;
+      color: #f8fafc;
+      border: 1px solid #475569;
+    }
+    .cctv-controls a { font-size: 12px; color: #2563eb; text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span>🛡️ 台灣防災多 Agent GPS 撤離導航</span>
+      <span id="shelterCountBadge" class="pill">載入避難所中...</span>
+      <span id="proactiveBadge" class="pill" style="cursor:pointer;" onclick="switchTab('proactive')">📡 主動巡檢中</span>
+    </div>
+    <div class="controls">
+      <select id="scenarioSelect" title="選擇即時模式或歷史災難演練">
+        <option value="">🟢 即時官方資料模式</option>
+      </select>
+      <button class="btn-blue" onclick="locateUserGPS()">📡 自動定位 GPS</button>
+      <button class="btn-amber" onclick="jumpDemo('kaohsiung')">🧪 演練：高雄三民</button>
+      <button class="btn-amber" onclick="jumpDemo('sandimen')">⛰️ 演練：屏東三地門</button>
+    </div>
+  </header>
+
+  <div id="proactiveToast" class="proactive-toast">
+    <div id="proactiveToastText"></div>
+    <button style="background:rgba(0,0,0,0.3);border-color:#fca5a5;padding:0.25rem 0.6rem;" onclick="document.getElementById('proactiveToast').style.display='none'">關閉</button>
+  </div>
+
+  <div class="layout">
+    <div class="left-col">
+      <div id="weatherCard" class="weather-card">
+        <div class="weather-head">
+          <span class="weather-title">🌤️ 當地天氣與戶外提示</span>
+          <span id="weatherPlacePill" class="pill">定位中...</span>
+        </div>
+        <div id="weatherHeadline" class="weather-headline">正在取得即時天氣與戶外建議...</div>
+        <div id="weatherTips"></div>
+      </div>
+
+      <div id="mapWrap">
+        <div id="map"></div>
+        <div class="legend">
+          <div>🔵 你的 GPS 位置（點地圖可移動）</div>
+          <div>🟢 推薦避難所（#1 首選）</div>
+          <div>🛣️ 藍色路線：步行路徑</div>
+          <div>💧 紅色水滴：IoT 淹水深度</div>
+          <div>📹 紫／橘／灰：官方即時 CCTV</div>
+          <label style="display:flex;align-items:center;gap:4px;margin-top:3px;cursor:pointer;color:#e2e8f0;">
+            <input type="checkbox" id="toggleCctv" checked onchange="toggleCctvLayer()" />
+            <span id="cctvLegendCount">顯示附近即時 CCTV</span>
+          </label>
+        </div>
+        <div class="map-hint" id="mapStatus">正在初始化地圖與 GPS...</div>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <div class="card">
+        <h3>
+          <span>📍 當前定位與即時分析</span>
+          <span id="modeTag" class="pill">🟢 即時模式</span>
+        </h3>
+        <div id="gpsReadout" class="gps-readout">尚未取得 GPS 座標</div>
+        <div id="passwordRow" class="prompt-row" style="display:none;">
+          <input id="accessPassword" type="password" placeholder="🔒 本站已啟用通關密碼，請輸入密碼" />
+        </div>
+        <div class="prompt-row">
+          <input id="userMessage" type="text" placeholder="可補充現場狀況（例：外面積水快到小腿，附近安全嗎？要怎麼撤離？）" />
+          <button id="analyzeBtn" class="btn-primary" onclick="runMultiAgent()">🚀 多 Agent 分析</button>
+        </div>
+        <div id="runProgress" style="margin-top:0.55rem;"></div>
+        <div id="riskBanner" class="risk-banner" style="margin-top:0.65rem;"></div>
+        <div id="autoAlertBox" class="alert-box"></div>
+      </div>
+
+      <div class="card">
+        <h3>
+          <span>🏫 最近避難收容處所 & 步行路線</span>
+          <span id="routeSummary" class="pill">點地圖即時更新</span>
+        </h3>
+        <div id="shelterList" style="font-size:0.85rem;color:#94a3b8;">正在計算距離最近的官方避難收容處所...</div>
+      </div>
+
+      <div class="card" style="flex:1;">
+        <h3><span>🤖 三階段多 Agent 協作報告</span></h3>
+        <div class="tabs">
+          <button class="tab active" data-tab="final" onclick="switchTab('final')">3. 撤離規劃與指引</button>
+          <button class="tab" data-tab="monitor" onclick="switchTab('monitor')">1. 災情監測</button>
+          <button class="tab" data-tab="risk" onclick="switchTab('risk')">2. 風險判讀</button>
+          <button class="tab" data-tab="proactive" onclick="switchTab('proactive')">📡 主動巡檢訂閱</button>
+          <button class="tab" data-tab="alerts" onclick="switchTab('alerts')">🔔 自動告警紀錄</button>
+        </div>
+        <div id="tabContent" class="md-body">
+          按下上方 <b>「🚀 多 Agent 分析」</b>，系統會依序啟動：<br/>
+          1️⃣ <b>災情監測 Agent</b>（水利署、NCDR、水保署、水庫、IoT 感測器、雨量）<br/>
+          2️⃣ <b>風險判讀 Agent</b>（確定性規則引擎分級 + 封閉路段）<br/>
+          3️⃣ <b>撤離規劃與自動通知 Agent</b>（最佳避難所 + 步行路線 + 高風險自動告警免人工審核）
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    let map, userMarker, routeLine;
+    let shelterLayer, sensorLayer, cctvLayer;
+    let activeCctvTimer = null;
+    let cctvFramesCache = {};
+    let currentLat = 25.033964;
+    let currentLon = 121.564468;
+    let activeTab = "final";
+    let stageTexts = { final: "", monitor: "", risk: "" };
+    let recentAlerts = [];
+    let proactiveStatus = { enabled: true, poll_seconds: 300, subscribers: [], last_patrol: null };
+    let seenAlertIds = new Set();
+    let lastPlaceName = "";
+
+    function escapeHtml(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderMarkdown(md) {
+      if (!md) return "<span style='color:#94a3b8'>尚無內容</span>";
+      let html = escapeHtml(md);
+      // 連結 [text](url)
+      html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      // 粗體與行內程式碼
+      html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+      const lines = html.split("\n");
+      const out = [];
+      let inList = false;
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (/^---+$/.test(line)) {
+          if (inList) { out.push("</ul>"); inList = false; }
+          out.push("<hr/>");
+        } else if (line.startsWith("#### ")) {
+          if (inList) { out.push("</ul>"); inList = false; }
+          out.push(`<h4>${line.slice(5)}</h4>`);
+        } else if (line.startsWith("### ")) {
+          if (inList) { out.push("</ul>"); inList = false; }
+          out.push(`<h3>${line.slice(4)}</h3>`);
+        } else if (/^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
+          if (!inList) { out.push("<ul>"); inList = true; }
+          out.push(`<li>${line.replace(/^([-*]|\d+\.)\s+/, "")}</li>`);
+        } else if (line === "") {
+          if (inList) { out.push("</ul>"); inList = false; }
+        } else {
+          if (inList) { out.push("</ul>"); inList = false; }
+          out.push(`<p style="margin:0.35rem 0;">${line}</p>`);
+        }
+      }
+      if (inList) out.push("</ul>");
+      return out.join("\n");
+    }
+
+    function makeIcon(html, bg, size = 30) {
+      return L.divIcon({
+        className: "",
+        html: `<div class="custom-pin" style="width:${size}px;height:${size}px;background:${bg};font-size:${Math.round(size*0.48)}px;">${html}</div>`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+      });
+    }
+
+    function initMap() {
+      map = L.map("map").setView([currentLat, currentLon], 14);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(map);
+
+      shelterLayer = L.layerGroup().addTo(map);
+      sensorLayer = L.layerGroup().addTo(map);
+      cctvLayer = L.layerGroup().addTo(map);
+
+      map.on("popupclose", () => {
+        if (activeCctvTimer) { clearInterval(activeCctvTimer); activeCctvTimer = null; }
+      });
+
+      map.on("click", (e) => {
+        setPosition(e.latlng.lat, e.latlng.lng, "已點擊地圖移動 GPS 座標");
+      });
+    }
+
+    function updateModeTag() {
+      const sel = document.getElementById("scenarioSelect");
+      const tag = document.getElementById("modeTag");
+      tag.textContent = sel.value ? "🧪 歷史災難演練模式" : "🟢 即時官方模式";
+    }
+
+    async function bootstrap() {
+      initMap();
+      const res = await fetch("/api/bootstrap");
+      const data = await res.json();
+      document.getElementById("shelterCountBadge").textContent =
+        `已載入 ${data.shelter_count.toLocaleString()} 處全台官方避難所`;
+      recentAlerts = data.recent_alerts || [];
+      recentAlerts.forEach((a) => a.alert_id && seenAlertIds.add(a.alert_id));
+      if (data.password_required) {
+        document.getElementById("passwordRow").style.display = "flex";
+      }
+
+      const sel = document.getElementById("scenarioSelect");
+      for (const sc of data.scenarios || []) {
+        const opt = document.createElement("option");
+        opt.value = sc.scenario_id;
+        opt.textContent = `🧪 演練：${sc["標題"]} (${(sc["模擬時間"] || "").slice(0, 16)})`;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener("change", () => {
+        updateModeTag();
+        refreshNearby();
+      });
+
+      await pollProactiveStatus(false);
+      setInterval(() => pollProactiveStatus(true), 20000);
+      locateUserGPS();
+    }
+
+    function locateUserGPS() {
+      const status = document.getElementById("mapStatus");
+      if (!navigator.geolocation) {
+        status.textContent = "瀏覽器不支援 GPS，已使用預設座標（點擊地圖可移動）";
+        setPosition(currentLat, currentLon, "瀏覽器不支援 GPS");
+        return;
+      }
+      status.textContent = "📡 正在取得你的瀏覽器 GPS 位置...";
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const acc = Math.round(pos.coords.accuracy || 0);
+          setPosition(pos.coords.latitude, pos.coords.longitude, `GPS 定位成功（誤差約 ${acc}m）`);
+        },
+        () => {
+          status.textContent = "未取得 GPS 權限，已先顯示台北位置（可點擊地圖或上方演練點）";
+          setPosition(currentLat, currentLon, "預設座標");
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    }
+
+    function jumpDemo(which) {
+      const sel = document.getElementById("scenarioSelect");
+      sel.value = "2024_gaemi_typhoon";
+      updateModeTag();
+      if (which === "kaohsiung") {
+        document.getElementById("userMessage").value = "外面積水已經快到小腿，附近有沒有危險？最近的避難收容處所在哪裡、要怎麼去？";
+        setPosition(22.6465, 120.3208, "🧪 凱米颱風演練點：高雄市三民區");
+      } else {
+        document.getElementById("userMessage").value = "我在山區雨下超大，有土石流風險嗎？台24線能走嗎？最近避難所怎麼去？";
+        setPosition(22.7145, 120.6518, "⛰️ 凱米颱風演練點：屏東縣三地門鄉");
+      }
+    }
+
+    function setPosition(lat, lon, label) {
+      currentLat = lat;
+      currentLon = lon;
+      document.getElementById("mapStatus").textContent = `${label} (${lat.toFixed(5)}, ${lon.toFixed(5)})`;
+      if (!userMarker) {
+        userMarker = L.marker([lat, lon], { icon: makeIcon("我", "#2563eb", 34) }).addTo(map);
+      } else {
+        userMarker.setLatLng([lat, lon]);
+      }
+      map.setView([lat, lon], 14);
+      refreshNearby();
+    }
+
+    function renderMapData(mapData) {
+      if (!mapData) return;
+      const u = mapData.user || {};
+      lastPlaceName = u.place || "";
+      document.getElementById("gpsReadout").innerHTML =
+        `<b>${escapeHtml(u.place || "台灣")}</b>${u.road ? " · " + escapeHtml(u.road) : ""}<br/>` +
+        `<span style="color:#94a3b8;">GPS: ${Number(u.latitude || currentLat).toFixed(6)}, ${Number(u.longitude || currentLon).toFixed(6)}</span>`;
+
+      const weatherCard = document.getElementById("weatherCard");
+      const weatherPlace = document.getElementById("weatherPlacePill");
+      const weatherHeadline = document.getElementById("weatherHeadline");
+      const weatherTips = document.getElementById("weatherTips");
+      const ow = mapData.outdoor_weather;
+      weatherPlace.textContent = u.place || "台灣";
+      if (ow && ow.status === "ok" && ow.headline) {
+        weatherCard.classList.toggle("sim", ow.mode === "simulation");
+        weatherHeadline.textContent = ow.headline;
+        weatherTips.innerHTML = (ow.outdoor_tips || [])
+          .map((t) => `<div class="weather-tip-item">${escapeHtml(t)}</div>`)
+          .join("");
+      } else {
+        weatherCard.classList.remove("sim");
+        weatherHeadline.textContent = (ow && ow.headline) || "暫時無法取得即時天氣資料";
+        weatherTips.innerHTML = "";
+      }
+      setTimeout(() => { if (map) map.invalidateSize(); }, 60);
+
+      shelterLayer.clearLayers();
+      sensorLayer.clearLayers();
+      cctvLayer.clearLayers();
+      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+
+      const shelters = mapData.shelters || [];
+      const bounds = [[currentLat, currentLon]];
+
+      shelters.forEach((s, idx) => {
+        if (!s["緯度"] || !s["經度"]) return;
+        const isTop = idx === 0;
+        const marker = L.marker([s["緯度"], s["經度"]], {
+          icon: makeIcon(String(idx + 1), isTop ? "#10b981" : "#059669", isTop ? 32 : 26),
+        }).addTo(shelterLayer);
+        marker.bindPopup(
+          `<b>#${idx + 1} ${escapeHtml(s["名稱"])}</b><br/>` +
+          `${escapeHtml(s["距離與方位"] || "")}<br/>` +
+          `地址：${escapeHtml(s["地址"] || "無")}<br/>` +
+          `適用災害：${escapeHtml(s["適用災害類別"] || "")}｜容納 ${s["預計收容人數"] || 0} 人<br/>` +
+          `<a href="${s["google_maps_導航連結"]}" target="_blank" rel="noopener">🚶 開啟 Google Maps 步行導航</a>`
+        );
+        if (idx < 3) bounds.push([s["緯度"], s["經度"]]);
+      });
+
+      const sensors = mapData.flood_sensors || [];
+      sensors.forEach((f) => {
+        if (!f["緯度"] || !f["經度"]) return;
+        const cm = f["淹水深度_cm"] ?? "?";
+        const m = L.marker([f["緯度"], f["經度"]], {
+          icon: makeIcon("💧", "#dc2626", 28),
+        }).addTo(sensorLayer);
+        m.bindPopup(
+          `<b>💧 淹水感測器：${escapeHtml(f["測站名稱"])}</b><br/>` +
+          `實測積水：<b style="color:#dc2626;">${cm} 公分</b><br/>` +
+          `狀態：${escapeHtml(f["狀態"] || "")}<br/>` +
+          `時間：${escapeHtml(f["觀測時間"] || "")}`
+        );
+      });
+
+      const cctvs = mapData.cctvs || [];
+      const cctvCountEl = document.getElementById("cctvLegendCount");
+      if (cctvCountEl) cctvCountEl.textContent = `顯示附近即時 CCTV (${cctvs.length})`;
+      cctvs.forEach((cam) => {
+        if (!cam.lat || !cam.lon) return;
+        const styleMap = {
+          wra: { icon: "📹", color: "#7c3aed" },
+          landslide: { icon: "⛰️", color: "#c2410c" },
+          freeway: { icon: "🛣️", color: "#475569" },
+        };
+        const st = styleMap[cam.category] || { icon: "📹", color: "#7c3aed" };
+        const safeDomId = String(cam.id).replace(/[^a-zA-Z0-9_-]/g, "_");
+        const m = L.marker([cam.lat, cam.lon], {
+          icon: makeIcon(st.icon, st.color, 26),
+        }).addTo(cctvLayer);
+
+        const extraLoc = cam.basin ? `｜流域：${escapeHtml(cam.basin)}` : (cam.location_desc ? `｜${escapeHtml(cam.location_desc)}` : "");
+        const popupHtml = `
+          <div class="cctv-viewer">
+            <div style="font-weight:700;font-size:13px;">${st.icon} ${escapeHtml(cam.name)}</div>
+            <div style="font-size:11px;color:#475569;margin-top:2px;">
+              ${escapeHtml(cam.category_label)}｜${escapeHtml(cam.distance_text || "")}<br/>
+              ${escapeHtml(cam.area || "")}${extraLoc}
+            </div>
+            <div id="cctv-box-${safeDomId}" class="cctv-frame-wrap">載入即時現場影像中...</div>
+            <div id="cctv-ctrl-${safeDomId}" class="cctv-controls"></div>
+          </div>
+        `;
+        m.bindPopup(popupHtml, { maxWidth: 320, minWidth: 280 });
+        m.on("popupopen", () => loadCctvInPopup(cam, safeDomId));
+      });
+      toggleCctvLayer();
+
+      const route = mapData.primary_route;
+      if (route && Array.isArray(route.route_coords) && route.route_coords.length >= 2) {
+        routeLine = L.polyline(route.route_coords, {
+          color: "#38bdf8",
+          weight: 5,
+          opacity: 0.9,
+          dashArray: "8, 6",
+        }).addTo(map);
+        document.getElementById("routeSummary").textContent =
+          `首選 ${route.route_distance_text} · 步行約 ${route.estimated_minutes} 分鐘`;
+      } else {
+        document.getElementById("routeSummary").textContent = `找到 ${shelters.length} 處`;
+      }
+
+      if (bounds.length > 1) {
+        map.fitBounds(bounds, { padding: [45, 45], maxZoom: 15 });
+      }
+
+      const listEl = document.getElementById("shelterList");
+      if (!shelters.length) {
+        listEl.innerHTML = "查無附近避難收容處所。";
+        return;
+      }
+      listEl.innerHTML = shelters.slice(0, 3).map((s, idx) => {
+        const walkUrl = (idx === 0 && route && route.google_maps_walking_url) ? route.google_maps_walking_url : s["google_maps_導航連結"];
+        const driveUrl = (idx === 0 && route && route.google_maps_driving_url) ? route.google_maps_driving_url : "";
+        return `
+          <div class="shelter-item ${idx === 0 ? "top" : ""}">
+            <div class="shelter-head">
+              <span>${idx === 0 ? "⭐ 首選：" : `#${idx + 1} `}${escapeHtml(s["名稱"])}</span>
+              <span style="color:#34d399;">${escapeHtml(s["距離與方位"] || "")}</span>
+            </div>
+            <div class="shelter-meta">
+              ${escapeHtml(s["地址"] || s["縣市及鄉鎮市區"])}｜可容納 ${s["預計收容人數"] || 0} 人｜適用：${escapeHtml(s["適用災害類別"] || "")}
+              ${s["管理人電話"] ? `｜☎️ ${escapeHtml(s["管理人電話"])}` : ""}
+            </div>
+            <div class="nav-links">
+              ${walkUrl ? `<a href="${walkUrl}" target="_blank" rel="noopener">🚶 Google Maps 步行導航</a>` : ""}
+              ${driveUrl ? `<a href="${driveUrl}" target="_blank" rel="noopener">🚗 Google Maps 開車導航</a>` : ""}
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function toggleCctvLayer() {
+      const cb = document.getElementById("toggleCctv");
+      if (!cb || !map || !cctvLayer) return;
+      if (cb.checked) {
+        if (!map.hasLayer(cctvLayer)) map.addLayer(cctvLayer);
+      } else {
+        if (map.hasLayer(cctvLayer)) map.removeLayer(cctvLayer);
+      }
+    }
+
+    function stopCctvTimelapse() {
+      if (activeCctvTimer) {
+        clearInterval(activeCctvTimer);
+        activeCctvTimer = null;
+      }
+    }
+
+    function renderCctvImage(boxEl, ctrlEl, url, safeDomId, extraBtnsHtml) {
+      const bustUrl = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
+      boxEl.innerHTML = `<img id="cctv-img-${safeDomId}" src="${bustUrl}" referrerpolicy="no-referrer" alt="即時監測影像" onerror="this.parentElement.innerHTML='影像暫時無法內嵌載入（可能官方測站維護中或限制跨站），請點下方原圖連結開啟。'" />`;
+      ctrlEl.innerHTML =
+        `${extraBtnsHtml || ""}` +
+        `<a href="${url}" target="_blank" rel="noopener">🔗 新分頁看原圖</a>`;
+    }
+
+    function toggleWraTimelapse(safeDomId) {
+      const frames = cctvFramesCache[safeDomId] || [];
+      const btn = document.getElementById(`cctv-play-${safeDomId}`);
+      const img = document.getElementById(`cctv-img-${safeDomId}`);
+      if (!frames.length || !img) return;
+      if (activeCctvTimer) {
+        stopCctvTimelapse();
+        if (btn) btn.textContent = "▶ 輪播近 10 分鐘";
+        return;
+      }
+      let idx = 0;
+      if (btn) btn.textContent = "⏹ 停止輪播";
+      activeCctvTimer = setInterval(() => {
+        const curImg = document.getElementById(`cctv-img-${safeDomId}`);
+        if (!curImg) { stopCctvTimelapse(); return; }
+        curImg.src = frames[idx % frames.length];
+        idx += 1;
+      }, 750);
+    }
+
+    async function loadCctvInPopup(cam, safeDomId) {
+      stopCctvTimelapse();
+      const boxEl = document.getElementById(`cctv-box-${safeDomId}`);
+      const ctrlEl = document.getElementById(`cctv-ctrl-${safeDomId}`);
+      if (!boxEl || !ctrlEl) return;
+
+      if (cam.stream_type === "wra_dynamic") {
+        boxEl.textContent = "正在連線水利署即時影像伺服器...";
+        try {
+          const res = await fetch(`/api/cctv/wra/${cam.source_id}/${encodeURIComponent(cam.station_id)}`);
+          const data = await res.json();
+          if (data.status === "ok" && data.cameras && data.cameras.length) {
+            const firstCam = data.cameras[0];
+            cctvFramesCache[safeDomId] = firstCam.images || [];
+            const hasMulti = (firstCam.images || []).length > 1;
+            const playBtn = hasMulti
+              ? `<button id="cctv-play-${safeDomId}" onclick="toggleWraTimelapse('${safeDomId}')">▶ 輪播近 10 分鐘 (${firstCam.images.length}幀)</button>`
+              : "";
+            const refreshBtn = `<button onclick="loadCctvInPopup(${JSON.stringify(cam).replace(/"/g, "&quot;")}, '${safeDomId}')">🔄 刷新</button>`;
+            renderCctvImage(boxEl, ctrlEl, firstCam.latest_image, safeDomId, playBtn + refreshBtn);
+          } else {
+            boxEl.textContent = data.message || "此水利署測站暫無即時畫面。";
+            ctrlEl.innerHTML = "";
+          }
+        } catch (e) {
+          boxEl.textContent = "載入水利署影像失敗：" + e.message;
+        }
+        return;
+      }
+
+      const refreshBtn = `<button onclick="loadCctvInPopup(${JSON.stringify(cam).replace(/"/g, "&quot;")}, '${safeDomId}')">🔄 刷新</button>`;
+      renderCctvImage(boxEl, ctrlEl, cam.image_url, safeDomId, refreshBtn);
+    }
+
+    async function refreshNearby() {
+      const scenario_id = document.getElementById("scenarioSelect").value;
+      try {
+        const res = await fetch("/api/nearby", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ latitude: currentLat, longitude: currentLon, scenario_id, limit: 5 }),
+        });
+        const data = await res.json();
+        renderMapData(data);
+      } catch (e) {
+        document.getElementById("shelterList").textContent = "查詢附近避難所失敗：" + e.message;
+      }
+    }
+
+    function switchTab(tab) {
+      activeTab = tab;
+      document.querySelectorAll(".tab").forEach((b) => {
+        b.classList.toggle("active", b.dataset.tab === tab);
+      });
+      const el = document.getElementById("tabContent");
+      if (tab === "proactive") {
+        renderProactivePanel();
+        return;
+      }
+      if (tab === "alerts") {
+        if (!recentAlerts.length) {
+          el.innerHTML = "<p style='color:#94a3b8'>目前尚無自動告警紀錄。當系統判讀為 HIGH 或 CRITICAL 時會自動觸發並記錄於此。</p>";
+          return;
+        }
+        el.innerHTML = recentAlerts.map((a) => `
+          <div class="shelter-item" style="border-color:${a.severity === "CRITICAL" ? "#ef4444" : "#f59e0b"};">
+            <div class="shelter-head">
+              <span>${a.is_simulation ? "🧪" : "🚨"} ${escapeHtml(a.alert_id)}｜${escapeHtml(a.severity)}</span>
+              <span style="color:#94a3b8;font-size:0.75rem;">${escapeHtml(a.dispatched_at)}</span>
+            </div>
+            <div class="shelter-meta">${escapeHtml(a.location)} — ${escapeHtml(a.summary)}</div>
+            ${a.recommended_shelter ? `<div class="shelter-meta">推薦避難所：${escapeHtml(a.recommended_shelter)}</div>` : ""}
+          </div>
+        `).join("");
+        return;
+      }
+      el.innerHTML = renderMarkdown(stageTexts[tab]);
+    }
+
+    function showProactiveBanner(alertObj) {
+      const toast = document.getElementById("proactiveToast");
+      const txt = document.getElementById("proactiveToastText");
+      const navPart = alertObj.navigation_url
+        ? ` ｜ <a href="${alertObj.navigation_url}" target="_blank" rel="noopener">🚶 開啟最近避難所導航（${escapeHtml(alertObj.recommended_shelter || "避難所")}）</a>`
+        : "";
+      txt.innerHTML =
+        `🚨 <b>主動監測自動推播 [${escapeHtml(alertObj.severity || alertObj.risk_level)}]</b>：` +
+        `${escapeHtml(alertObj.location || alertObj.subscriber_name)} — ${escapeHtml(alertObj.summary || "")}${navPart}`;
+      toast.style.display = "flex";
+
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(`🚨 防災主動告警 (${alertObj.severity || alertObj.risk_level})`, {
+          body: `${alertObj.location || alertObj.subscriber_name}\n${alertObj.summary || ""}`,
+        });
+      }
+    }
+
+    async function requestBrowserNotifications() {
+      if (!("Notification" in window)) {
+        alert("此瀏覽器不支援原生桌面通知，仍會使用網頁上方紅色即時橫幅通知。");
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      renderProactivePanel();
+      if (perm === "granted") {
+        new Notification("🛡️ 防災主動推播已啟用", { body: "當登錄區域升級警戒時，系統會自動彈窗提醒您撤離。" });
+      }
+    }
+
+    async function pollProactiveStatus(notifyNew) {
+      try {
+        const res = await fetch("/api/proactive/status");
+        const data = await res.json();
+        proactiveStatus = data;
+        const badge = document.getElementById("proactiveBadge");
+        const count = (data.subscribers || []).length;
+        badge.textContent = data.enabled
+          ? `📡 主動巡檢中（${count} 人｜每 ${Math.round(data.poll_seconds / 60)} 分）`
+          : `⏸️ 主動巡檢已暫停（${count} 人）`;
+
+        const latestAlerts = data.recent_alerts || [];
+        if (notifyNew) {
+          for (const a of latestAlerts) {
+            if (a.alert_id && !seenAlertIds.has(a.alert_id)) {
+              seenAlertIds.add(a.alert_id);
+              showProactiveBanner(a);
+            }
+          }
+        } else {
+          latestAlerts.forEach((a) => a.alert_id && seenAlertIds.add(a.alert_id));
+        }
+        recentAlerts = latestAlerts;
+        if (activeTab === "proactive") renderProactivePanel();
+      } catch (e) {}
+    }
+
+    function renderProactivePanel() {
+      const el = document.getElementById("tabContent");
+      const subs = proactiveStatus.subscribers || [];
+      const last = proactiveStatus.last_patrol;
+      const notifPerm = ("Notification" in window) ? Notification.permission : "unsupported";
+
+      const subCards = subs.length
+        ? subs.map((s) => `
+          <div class="shelter-item">
+            <div class="shelter-head">
+              <span>👤 ${escapeHtml(s.name)}（${escapeHtml(s.place)}）</span>
+              <span class="badge-${escapeHtml(s.last_risk_level || "LOW")}">${escapeHtml(s.last_risk_level || "LOW")}</span>
+            </div>
+            <div class="shelter-meta">
+              推播門檻：<b>${s.min_level === "CRITICAL" ? "一級／紅色警戒 (CRITICAL)" : "含二級／黃色 (HIGH)"}</b>
+              ${s.latitude ? `｜GPS: ${Number(s.latitude).toFixed(4)}, ${Number(s.longitude).toFixed(4)}` : ""}
+              ${s.webhook_url ? "｜🔗 已綁個人 Webhook" : ""}
+            </div>
+            <div class="shelter-meta">
+              上次巡檢：${escapeHtml(s.last_checked_at || "尚未巡檢")}
+              ${s.last_alert_id ? `｜最近推播：<code>${escapeHtml(s.last_alert_id)}</code>` : ""}
+              <button style="float:right;padding:0.15rem 0.45rem;font-size:0.75rem;" onclick="deleteSubscriber('${escapeHtml(s.id)}')">移除</button>
+            </div>
+          </div>
+        `).join("")
+        : `<p style="color:#94a3b8;font-size:0.84rem;">目前尚無已登錄民眾。請點擊地圖選一個位置（或先點上方「🧪 演練：高雄三民」），再按下方「＋ 登錄目前 GPS 民眾」！</p>`;
+
+      const lastHtml = last && last.results
+        ? `<div class="shelter-item" style="border-color:#38bdf8;">
+             <div class="shelter-head">
+               <span>📋 最近一次巡檢報告（${last.mode === "simulation" ? "演練模式" : "即時模式"}）</span>
+               <span style="color:#94a3b8;font-size:0.75rem;">${escapeHtml(last.ran_at || "")}</span>
+             </div>
+             <div class="shelter-meta">巡檢 ${last.checked_count} 位民眾，自動推播 <b style="color:#f87171;">${last.triggered_count}</b> 筆告警</div>
+             ${(last.results || []).map((r) => `
+               <div class="shelter-meta" style="margin-top:0.3rem;padding-top:0.3rem;border-top:1px solid #1e293b;">
+                 • <b>${escapeHtml(r.name)}</b>（${escapeHtml(r.place)}）→ <span class="badge-${escapeHtml(r.risk_level)}">${escapeHtml(r.risk_level)}</span>：${escapeHtml(r.notify_reason)}
+                 ${r.navigation_url ? ` <a href="${r.navigation_url}" target="_blank" rel="noopener">🚶 避難導航(${escapeHtml(r.recommended_shelter || "")})</a>` : ""}
+               </div>
+             `).join("")}
+           </div>`
+        : "";
+
+      el.innerHTML = `
+        <div class="sub-actions">
+          <button class="btn-primary" onclick="runPatrolNow(true)">⚡ 立即巡檢推播（依目前模式）</button>
+          <button onclick="toggleProactiveLoop()">${proactiveStatus.enabled ? "⏸️ 暫停背景定時巡檢" : "▶️ 啟動背景定時巡檢"}</button>
+          ${notifPerm !== "granted" ? `<button class="btn-blue" onclick="requestBrowserNotifications()">🔔 開啟瀏覽器彈窗通知</button>` : `<span class="pill">🔔 瀏覽器通知已啟用</span>`}
+        </div>
+        <div class="shelter-item" style="border-color:#334155;">
+          <div style="font-weight:700;margin-bottom:0.45rem;">➕ 登錄目前地圖 GPS 為監測對象（${escapeHtml(lastPlaceName || `${currentLat.toFixed(4)}, ${currentLon.toFixed(4)}`)}）</div>
+          <div class="sub-form">
+            <input id="subName" type="text" placeholder="稱呼（例：王小明 - 三民家）" />
+            <select id="subLevel">
+              <option value="CRITICAL">一級／紅色警戒才推播 (CRITICAL)</option>
+              <option value="HIGH">二級／黃色警戒就推播 (HIGH)</option>
+            </select>
+            <input id="subWebhook" class="full" type="text" placeholder="選填：個人 Discord / Slack Webhook 網址（留空則用網頁與系統紀錄推播）" />
+          </div>
+          <button class="btn-blue" onclick="registerCurrentLocation()">＋ 登錄目前 GPS 位置</button>
+        </div>
+        <h4 style="margin:0.7rem 0 0.3rem;">已登錄監測民眾（${subs.length} 人）</h4>
+        ${subCards}
+        ${lastHtml}
+      `;
+    }
+
+    async function registerCurrentLocation() {
+      const name = (document.getElementById("subName")?.value || "").trim() || `${lastPlaceName || "居民"}監測點`;
+      const min_level = document.getElementById("subLevel")?.value || "CRITICAL";
+      const webhook_url = (document.getElementById("subWebhook")?.value || "").trim();
+      const res = await fetch("/api/proactive/subscribers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          latitude: currentLat,
+          longitude: currentLon,
+          place: lastPlaceName,
+          min_level,
+          webhook_url,
+        }),
+      });
+      if (res.ok) {
+        await pollProactiveStatus(false);
+        renderProactivePanel();
+      } else {
+        const err = await res.json();
+        alert(err.detail || "登錄失敗");
+      }
+    }
+
+    async function deleteSubscriber(id) {
+      await fetch(`/api/proactive/subscribers/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await pollProactiveStatus(false);
+      renderProactivePanel();
+    }
+
+    async function toggleProactiveLoop() {
+      const nextEnabled = !proactiveStatus.enabled;
+      const scenario_id = document.getElementById("scenarioSelect").value;
+      await fetch("/api/proactive/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: nextEnabled,
+          poll_seconds: proactiveStatus.poll_seconds || 300,
+          scenario_id,
+        }),
+      });
+      await pollProactiveStatus(false);
+      renderProactivePanel();
+    }
+
+    async function runPatrolNow(forceNotify) {
+      const scenario_id = document.getElementById("scenarioSelect").value;
+      const el = document.getElementById("tabContent");
+      el.innerHTML = `<span class="loading"><span class="spinner"></span>主動巡檢 Agent 正在掃描所有已登錄民眾之官方警戒...</span>`;
+      const res = await fetch("/api/proactive/patrol-now", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scenario_id, force_notify: forceNotify }),
+      });
+      const data = await res.json();
+      await pollProactiveStatus(false);
+      if (data.report && data.report.alerts_sent && data.report.alerts_sent.length) {
+        const first = data.report.alerts_sent[0];
+        seenAlertIds.add(first.alert_id);
+        showProactiveBanner({
+          severity: first.risk_level,
+          location: `${first.subscriber_name}（${first.place}）`,
+          summary: `自動發送 ${data.report.triggered_count} 筆撤離告警（編號 ${first.alert_id}）`,
+          recommended_shelter: first.recommended_shelter,
+          navigation_url: first.navigation_url,
+        });
+      }
+      renderProactivePanel();
+    }
+
+    async function runMultiAgent() {
+      const btn = document.getElementById("analyzeBtn");
+      const progress = document.getElementById("runProgress");
+      const banner = document.getElementById("riskBanner");
+      const alertBox = document.getElementById("autoAlertBox");
+
+      btn.disabled = true;
+      banner.style.display = "none";
+      alertBox.style.display = "none";
+      progress.innerHTML = `<span class="loading"><span class="spinner"></span>三階段多 Agent 執行中（災情監測 → 風險判讀 → 避難路線與自動告警），約 15~30 秒...</span>`;
+
+      try {
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            latitude: currentLat,
+            longitude: currentLon,
+            message: document.getElementById("userMessage").value,
+            scenario_id: document.getElementById("scenarioSelect").value,
+            access_password: (document.getElementById("accessPassword")?.value || ""),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "分析失敗");
+
+        renderMapData(data.map_data);
+        recentAlerts = data.recent_alerts || recentAlerts;
+
+        const lvl = data.risk_level || "LOW";
+        banner.className = `risk-banner risk-${lvl}`;
+        banner.style.display = "block";
+        banner.textContent = `🚨 系統判讀風險等級：${lvl}｜主要威脅：${(data.risk_data?.disaster_types || []).join("、") || "無"}`;
+
+        if (data.auto_alerts && data.auto_alerts.length) {
+          const a = data.auto_alerts[data.auto_alerts.length - 1];
+          alertBox.style.display = "block";
+          alertBox.innerHTML =
+            `<b>🔔 已自動發送撤離告警（無需人工審核）</b><br/>` +
+            `告警編號：<code>${escapeHtml(a.alert_id)}</code>｜時間：${escapeHtml(a.dispatched_at)}<br/>` +
+            `${a.is_simulation ? "模式：演練模擬自動紀錄（已寫入 logs/alerts_log.jsonl）" : "模式：正式自動告警推播"}`;
+        }
+
+        stageTexts = { final: data.final_reply || "", monitor: "", risk: "" };
+        for (const st of data.stages || []) {
+          if (st.author === "hazard_monitor_agent") stageTexts.monitor = st.text;
+          if (st.author === "risk_assessment_agent") stageTexts.risk = st.text;
+          if (st.author === "evacuation_planner_agent") stageTexts.final = st.text;
+        }
+        switchTab("final");
+        progress.innerHTML = `<span style="color:#34d399;font-size:0.84rem;">✅ 三階段多 Agent 分析完成！</span>`;
+      } catch (e) {
+        progress.innerHTML = `<span style="color:#f87171;font-size:0.84rem;">❌ ${escapeHtml(e.message)}</span>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    bootstrap();
+  </script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: taiwan-disaster-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn web_app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: CWA_API_KEY
+        sync: false
+      - key: NCDR_API_KEY
+        sync: false
+      - key: ALERT_WEBHOOK_URL
+        sync: false
+      - key: ACCESS_PASSWORD
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false

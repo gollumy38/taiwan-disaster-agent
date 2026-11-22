@@ -1,0 +1,8 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.adk/
+logs/
+docs/WATCH資料來源.xlsx

@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.adk/
+.git/
+logs/
+docs/
+test_tools.py
+gps_locator.html
