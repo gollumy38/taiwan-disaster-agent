@@ -27,9 +27,13 @@ from google.genai import types
 from pydantic import BaseModel, Field
 import uvicorn
 
-from disaster_agent.sub_agents import disaster_response_pipeline
+from disaster_agent.sub_agents import (
+    _extract_gps_and_place,
+    disaster_response_pipeline,
+)
 from tools import (
     add_subscriber,
+    answer_disaster_question,
     build_evacuation_flex_message,
     build_welcome_messages,
     default_quick_reply,
@@ -87,6 +91,17 @@ class AnalyzeRequest(BaseModel):
     longitude: float
     message: str = ""
     scenario_id: str = ""
+    access_password: str = ""
+
+
+class ChatRequest(BaseModel):
+    message: str
+    latitude: float = 0.0
+    longitude: float = 0.0
+    place: str = ""
+    scenario_id: str = ""
+    context_summary: str = ""
+    history: list[dict[str, str]] = Field(default_factory=list)
     access_password: str = ""
 
 
@@ -383,6 +398,55 @@ async def api_nearby(req: NearbyRequest):
     )
 
 
+@app.post("/api/chat")
+async def api_chat(req: ChatRequest, request: Request):
+    """Multi-turn conversational disaster Q&A endpoint for the web UI."""
+    required_pw = os.getenv("ACCESS_PASSWORD", "").strip()
+    if required_pw and req.access_password.strip() != required_pw:
+        raise HTTPException(status_code=401, detail="通關密碼錯誤，請輸入正確密碼後再試。")
+
+    _enforce_rate_limit(_client_ip(request))
+
+    q = req.message.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="請輸入問題。")
+
+    # 若使用者在聊天窗直接問某個台灣新地點的即時災情，自動帶入三階段多 Agent 查詢
+    lat_in, lon_in, place_in = _extract_gps_and_place(q)
+    if place_in or (lat_in and lon_in):
+        res = await _run_pipeline_for_line(q, req.scenario_id)
+        if res.get("final_reply"):
+            return {
+                "status": "ok",
+                "reply": res["final_reply"],
+                "mode": "multi_agent_pipeline",
+                "risk_level": (res.get("risk") or {}).get("risk_level"),
+            }
+
+    ctx_parts: list[str] = []
+    if req.place:
+        ctx_parts.append(f"目前地圖位置：{req.place}")
+    if req.latitude and req.longitude:
+        ctx_parts.append(f"GPS：{req.latitude:.5f}, {req.longitude:.5f}")
+    if req.scenario_id:
+        ctx_parts.append(f"目前處於歷史演練模式：{req.scenario_id}")
+    if req.context_summary:
+        ctx_parts.append(req.context_summary[:1500])
+
+    ans = await asyncio.to_thread(
+        answer_disaster_question,
+        q,
+        "\n".join(ctx_parts),
+        req.history,
+    )
+    return {
+        "status": "ok",
+        "reply": ans["reply"],
+        "mode": "disaster_chat",
+        "model": ans.get("model", ""),
+    }
+
+
 @app.post("/api/analyze")
 async def api_analyze(req: AnalyzeRequest, request: Request):
     required_pw = os.getenv("ACCESS_PASSWORD", "").strip()
@@ -557,6 +621,28 @@ async def _run_pipeline_for_line(
     }
 
 
+def _summarize_line_context(
+    place: str,
+    risk: dict[str, Any],
+    shelter: dict[str, Any] | None,
+    outdoor_weather: dict[str, Any] | None,
+    is_sim: bool,
+) -> str:
+    parts = [
+        f"模式：{'2024 凱米颱風演練模式' if is_sim else '即時官方資料模式'}",
+        f"位置：{place}",
+        f"風險等級：{risk.get('risk_level', 'LOW')}（{'、'.join(risk.get('disaster_types') or [])}）",
+        f"避難策略：{risk.get('strategy', '')}",
+    ]
+    if shelter:
+        parts.append(
+            f"最近避難所：{shelter.get('名稱')}｜{shelter.get('距離與方位', '')}｜地址：{shelter.get('地址', '')}｜電話：{shelter.get('管理人電話', '')}｜容納 {shelter.get('預計收容人數', 0)} 人"
+        )
+    if outdoor_weather and outdoor_weather.get("headline"):
+        parts.append(f"當地天氣：{outdoor_weather['headline']}")
+    return "\n".join(parts)
+
+
 async def _handle_line_event(event: dict[str, Any]) -> None:
     """Process a single LINE webhook event asynchronously and reply via LINE Reply API."""
     reply_token = event.get("replyToken") or ""
@@ -566,7 +652,14 @@ async def _handle_line_event(event: dict[str, Any]) -> None:
     line_user_id = (event.get("source") or {}).get("userId", "")
     prefs = _line_user_prefs.setdefault(
         line_user_id or "anonymous",
-        {"scenario_id": "", "last_lat": 0.0, "last_lon": 0.0, "last_place": ""},
+        {
+            "scenario_id": "",
+            "last_lat": 0.0,
+            "last_lon": 0.0,
+            "last_place": "",
+            "last_context": "",
+            "history": [],
+        },
     )
 
     try:
@@ -612,6 +705,9 @@ async def _handle_line_event(event: dict[str, Any]) -> None:
                 or ""
             ) if top_shelter else ""
 
+            prefs["last_context"] = _summarize_line_context(
+                place, risk, top_shelter, bundle.get("outdoor_weather"), is_sim
+            )
             flex = build_evacuation_flex_message(
                 risk_level=risk.get("risk_level", "LOW"),
                 place=place,
@@ -737,21 +833,42 @@ async def _handle_line_event(event: dict[str, Any]) -> None:
                 )
                 return
 
-            # 一般地名／災情提問：交給三階段多 Agent 流水線
+            # 判斷是否包含台灣地名／GPS：有則跑三階段官方災情流水線，無則進入自由防災問答對話！
+            lat_in, lon_in, place_in = _extract_gps_and_place(text)
+            if not place_in and not (lat_in and lon_in):
+                ans = await asyncio.to_thread(
+                    answer_disaster_question,
+                    text,
+                    str(prefs.get("last_context") or ""),
+                    prefs.get("history") or [],
+                )
+                reply_txt = ans["reply"][:1900]
+                hist = prefs.setdefault("history", [])
+                hist.append({"role": "user", "text": text})
+                hist.append({"role": "assistant", "text": reply_txt})
+                prefs["history"] = hist[-10:]
+                await asyncio.to_thread(
+                    reply_line_messages,
+                    reply_token,
+                    [{"type": "text", "text": reply_txt, "quickReply": default_quick_reply(is_sim)}],
+                )
+                return
+
+            # 包含地點／GPS 的提問：交給三階段多 Agent 流水線並回傳 Flex 卡片
             res = await _run_pipeline_for_line(text, scenario_id)
             bundle = res["bundle"]
             risk = res["risk"]
             if not bundle:
+                ans = await asyncio.to_thread(
+                    answer_disaster_question,
+                    text,
+                    str(prefs.get("last_context") or ""),
+                    prefs.get("history") or [],
+                )
                 await asyncio.to_thread(
                     reply_line_messages,
                     reply_token,
-                    [
-                        {
-                            "type": "text",
-                            "text": "請提供台灣縣市鄉鎮（例如「高雄三民區」、「新北汐止」），或直接點下方「📍 傳送我的位置」讓我精準定位查詢！",
-                            "quickReply": default_quick_reply(is_sim),
-                        }
-                    ],
+                    [{"type": "text", "text": ans["reply"][:1900], "quickReply": default_quick_reply(is_sim)}],
                 )
                 return
 
@@ -777,6 +894,14 @@ async def _handle_line_event(event: dict[str, Any]) -> None:
                 or top_shelter.get("google_maps_地圖連結")
                 or ""
             ) if top_shelter else ""
+
+            prefs["last_context"] = _summarize_line_context(
+                place, risk, top_shelter, bundle.get("outdoor_weather"), is_sim
+            )
+            hist = prefs.setdefault("history", [])
+            hist.append({"role": "user", "text": text})
+            hist.append({"role": "assistant", "text": f"已為您查詢 {place}（風險：{risk.get('risk_level', 'LOW')}）"})
+            prefs["history"] = hist[-10:]
 
             flex = build_evacuation_flex_message(
                 risk_level=risk.get("risk_level", "LOW"),

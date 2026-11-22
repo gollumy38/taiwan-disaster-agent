@@ -116,6 +116,18 @@ def default_quick_reply(is_simulation: bool = False) -> dict[str, Any]:
     items.append(
         {
             "type": "action",
+            "action": {"type": "message", "label": "🎒 避難包清單", "text": "緊急避難包要準備什麼？"},
+        }
+    )
+    items.append(
+        {
+            "type": "action",
+            "action": {"type": "message", "label": "🌍 地震保命", "text": "地震來了當下該怎麼辦？"},
+        }
+    )
+    items.append(
+        {
+            "type": "action",
             "action": {"type": "message", "label": "❓ 使用說明", "text": "說明"},
         }
     )
@@ -125,11 +137,11 @@ def default_quick_reply(is_simulation: bool = False) -> dict[str, Any]:
 def build_welcome_messages() -> list[dict[str, Any]]:
     text = (
         "🛡️ 歡迎使用【台灣防災多 Agent 撤離助理】！\n\n"
-        "你可以這樣用：\n"
-        "1️⃣ 點下方「📍 傳送我的位置」分享 GPS，立刻幫你查官方警戒、最近避難所、步行路線與即時天氣\n"
-        "2️⃣ 直接打地名提問（例如：新北市汐止安全嗎？）\n"
-        "3️⃣ 傳「訂閱」開啟主動監測推播（警戒升級會自動推播通知你）\n"
-        "4️⃣ 傳「演練凱米」可進入 2024 凱米颱風歷史演練模式試玩\n\n"
+        "你可以直接跟我聊天或查災情：\n"
+        "1️⃣ 點下方「📍 傳送我的位置」分享 GPS，立刻查官方警戒、最近避難所、步行導航與即時天氣\n"
+        "2️⃣ 直接輸入台灣地名查即時災情（例如：新北市汐止安全嗎？）\n"
+        "3️⃣ 自由發問任何防災與安全問題（例如：避難包要準備什麼？地震來了怎麼辦？家有長輩或寵物怎麼撤離？積水多深不能開車？）\n"
+        "4️⃣ 傳「訂閱」開啟主動監測推播；傳「演練凱米」體驗 2024 凱米颱風情境\n\n"
         "⚠️ 緊急生命危險請立即撥打 119。"
     )
     return [{"type": "text", "text": text, "quickReply": default_quick_reply(False)}]

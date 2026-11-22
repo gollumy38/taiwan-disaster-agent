@@ -14,6 +14,7 @@ from .disaster_apis import (
     get_reservoir_warnings,
     get_river_water_level,
 )
+from .disaster_chat import answer_disaster_question
 from .line_bot import (
     build_evacuation_flex_message,
     build_welcome_messages,
@@ -53,6 +54,7 @@ __all__ = [
     "find_nearby_cctvs",
     "get_wra_camera_frames",
     "collect_location_hazards",
+    "answer_disaster_question",
     "get_flood_warnings",
     "get_iot_flood_sensors",
     "get_river_water_level",
