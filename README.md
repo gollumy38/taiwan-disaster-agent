@@ -31,7 +31,7 @@ disaster_coordinator_agent（總控協調 Agent：即時／歷史演練切換）
 
 ## 快速開始
 
-### 方式一：啟動「專屬自動 GPS 互動地圖網頁」（最推薦！）
+### 方式一：啟動「專屬自動 GPS 互動地圖網頁」
 在 CMD 或 PowerShell 執行：
 ```powershell
 cd c:\Users\user\Desktop\agent
