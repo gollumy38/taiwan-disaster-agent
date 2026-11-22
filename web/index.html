@@ -485,30 +485,25 @@
         <div id="autoAlertBox" class="alert-box"></div>
       </div>
 
+      <div id="replyCard" class="card">
+        <h3><span>🤖 助理回覆與多 Agent 報告</span></h3>
+        <div class="tabs">
+          <button class="tab active" data-tab="chat" onclick="switchTab('chat')">💬 防災問答</button>
+          <button class="tab" data-tab="final" onclick="switchTab('final')">3. 撤離規劃與指引</button>
+          <button class="tab" data-tab="monitor" onclick="switchTab('monitor')">1. 災情監測</button>
+          <button class="tab" data-tab="risk" onclick="switchTab('risk')">2. 風險判讀</button>
+          <button class="tab" data-tab="proactive" onclick="switchTab('proactive')">📡 主動巡檢訂閱</button>
+          <button class="tab" data-tab="alerts" onclick="switchTab('alerts')">🔔 自動告警紀錄</button>
+        </div>
+        <div id="tabContent" class="md-body"></div>
+      </div>
+
       <div class="card">
         <h3>
           <span>🏫 最近避難收容處所 & 步行路線</span>
           <span id="routeSummary" class="pill">點地圖即時更新</span>
         </h3>
         <div id="shelterList" style="font-size:0.85rem;color:#94a3b8;">正在計算距離最近的官方避難收容處所...</div>
-      </div>
-
-      <div class="card" style="flex:1;">
-        <h3><span>🤖 三階段多 Agent 協作報告</span></h3>
-        <div class="tabs">
-          <button class="tab active" data-tab="final" onclick="switchTab('final')">3. 撤離規劃與指引</button>
-          <button class="tab" data-tab="chat" onclick="switchTab('chat')">💬 防災問答</button>
-          <button class="tab" data-tab="monitor" onclick="switchTab('monitor')">1. 災情監測</button>
-          <button class="tab" data-tab="risk" onclick="switchTab('risk')">2. 風險判讀</button>
-          <button class="tab" data-tab="proactive" onclick="switchTab('proactive')">📡 主動巡檢訂閱</button>
-          <button class="tab" data-tab="alerts" onclick="switchTab('alerts')">🔔 自動告警紀錄</button>
-        </div>
-        <div id="tabContent" class="md-body">
-          按下上方 <b>「🚀 多 Agent 分析」</b>，系統會依序啟動：<br/>
-          1️⃣ <b>災情監測 Agent</b>（水利署、NCDR、水保署、水庫、IoT 感測器、雨量）<br/>
-          2️⃣ <b>風險判讀 Agent</b>（確定性規則引擎分級 + 封閉路段）<br/>
-          3️⃣ <b>撤離規劃與自動通知 Agent</b>（最佳避難所 + 步行路線 + 高風險自動告警免人工審核）
-        </div>
       </div>
     </div>
   </div>
@@ -521,7 +516,7 @@
     let cctvFramesCache = {};
     let currentLat = 25.033964;
     let currentLon = 121.564468;
-    let activeTab = "final";
+    let activeTab = "chat";
     let stageTexts = { final: "", monitor: "", risk: "" };
     let recentAlerts = [];
     let proactiveStatus = { enabled: true, poll_seconds: 300, subscribers: [], last_patrol: null };
@@ -635,6 +630,7 @@
 
       await pollProactiveStatus(false);
       setInterval(() => pollProactiveStatus(true), 20000);
+      switchTab("chat");
       locateUserGPS();
     }
 
@@ -966,6 +962,7 @@
       const box = document.getElementById("userMessage");
       const text = (box ? box.value : "").trim();
       switchTab("chat");
+      document.getElementById("replyCard")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       if (text) {
         box.value = "";
         sendChatQuestion(text);
@@ -975,6 +972,8 @@
     function renderChatPanel(isSending = false) {
       const el = document.getElementById("tabContent");
       const chips = [
+        "📅 下週天氣如何？",
+        "👕 這天氣該穿什麼？",
         "🎒 緊急避難包要準備什麼？",
         "🌍 地震來了當下該怎麼辦？",
         "🚗 路面淹水多深不能開車？",
