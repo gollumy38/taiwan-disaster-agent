@@ -87,6 +87,16 @@ class NearbyRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=10)
 
 
+class RouteRequest(BaseModel):
+    origin_lat: float
+    origin_lon: float
+    dest_lat: float
+    dest_lon: float
+    dest_name: str = "避難收容處所"
+    travel_mode: str = "walking"
+    blocked_roads: str = ""
+
+
 class AnalyzeRequest(BaseModel):
     latitude: float
     longitude: float
@@ -396,6 +406,21 @@ async def api_nearby(req: NearbyRequest):
         scenario_id=req.scenario_id,
         disaster_type=req.disaster_type,
         limit=req.limit,
+    )
+
+
+@app.post("/api/route")
+async def api_route(req: RouteRequest):
+    """Compute real OSRM street route polyline & steps for any clicked shelter (3D fly-through)."""
+    return await asyncio.to_thread(
+        get_evacuation_route,
+        req.origin_lat,
+        req.origin_lon,
+        req.dest_lat,
+        req.dest_lon,
+        req.dest_name,
+        req.travel_mode,
+        req.blocked_roads,
     )
 
 

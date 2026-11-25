@@ -6,3 +6,4 @@ __pycache__/
 .adk/
 logs/
 docs/WATCH資料來源.xlsx
+*.pptx

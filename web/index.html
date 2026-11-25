@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>台灣防災多 Agent — GPS 即時避難導航地圖</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <title>台灣防災多 Agent — 3D GPS 即時避難導航地圖</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
   <style>
     :root {
       --bg: #0f172a;
@@ -350,8 +350,117 @@
     .custom-pin {
       display: flex; align-items: center; justify-content: center;
       border-radius: 50%; font-weight: 700; color: #fff;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+      box-shadow: 0 3px 10px rgba(0,0,0,0.45);
       border: 2px solid #fff;
+      cursor: pointer;
+      user-select: none;
+    }
+    .walker-pin {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: #0ea5e9;
+      border: 3px solid #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      box-shadow: 0 0 0 6px rgba(14, 165, 233, 0.35), 0 4px 14px rgba(0,0,0,0.5);
+    }
+    .map-toolbar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 650;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .map-toolbar button {
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid #475569;
+      color: #f8fafc;
+      font-size: 0.76rem;
+      padding: 0.32rem 0.62rem;
+      border-radius: 8px;
+      backdrop-filter: blur(6px);
+    }
+    .map-toolbar button.active-3d {
+      background: #0ea5e9;
+      border-color: #38bdf8;
+      color: #082f49;
+      font-weight: 700;
+    }
+    .fly-hud {
+      display: none;
+      position: absolute;
+      bottom: 44px;
+      left: 12px;
+      right: 12px;
+      z-index: 700;
+      background: rgba(15, 23, 42, 0.94);
+      border: 1px solid #38bdf8;
+      border-radius: 12px;
+      padding: 0.65rem 0.85rem;
+      color: #f1f5f9;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+    }
+    .fly-hud-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.84rem;
+      font-weight: 700;
+      color: #7dd3fc;
+    }
+    .fly-hud-step {
+      margin-top: 0.3rem;
+      font-size: 0.82rem;
+      color: #e2e8f0;
+    }
+    .fly-progress-track {
+      margin-top: 0.45rem;
+      width: 100%;
+      height: 6px;
+      background: #1e293b;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .fly-progress-bar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8, #10b981);
+      transition: width 0.08s linear;
+    }
+    .maplibregl-popup-content {
+      color: #0f172a;
+      border-radius: 10px !important;
+      padding: 10px 12px !important;
+      font-family: inherit;
+      font-size: 12.5px;
+      line-height: 1.5;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.35) !important;
+    }
+    .popup-3d-btn {
+      margin-top: 6px;
+      display: inline-block;
+      background: #0284c7;
+      color: #fff !important;
+      border: none;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .popup-3d-btn:hover { background: #0369a1; }
+    .btn-3d-mini {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+      font-size: 0.78rem;
+      padding: 0.22rem 0.6rem;
+      border-radius: 6px;
+      font-weight: 700;
     }
     .cctv-viewer { width: 280px; font-family: inherit; }
     .cctv-frame-wrap {
@@ -450,10 +559,14 @@
 
       <div id="mapWrap">
         <div id="map"></div>
+        <div class="map-toolbar">
+          <button id="btnToggle3D" class="active-3d" onclick="toggle3DView()">🏙️ 3D 視角：開</button>
+          <button onclick="play3DRouteDemoByIndex(0)">🎬 3D 演示首選路線</button>
+        </div>
         <div class="legend">
-          <div>🔵 你的 GPS 位置（點地圖可移動）</div>
-          <div>🟢 推薦避難所（#1 首選）</div>
-          <div>🛣️ 藍色路線：步行路徑</div>
+          <div>🔵 你的 GPS（點地圖移動／右鍵旋轉 3D）</div>
+          <div>🟢 避難所（點開可播 3D 路線演示）</div>
+          <div>🛣️ 藍綠光線：3D 步行撤離路徑</div>
           <div>💧 紅色水滴：IoT 淹水深度</div>
           <div>📹 紫／橘／灰：官方即時 CCTV</div>
           <label style="display:flex;align-items:center;gap:4px;margin-top:3px;cursor:pointer;color:#e2e8f0;">
@@ -461,7 +574,15 @@
             <span id="cctvLegendCount">顯示附近即時 CCTV</span>
           </label>
         </div>
-        <div class="map-hint" id="mapStatus">正在初始化地圖與 GPS...</div>
+        <div id="flyHud" class="fly-hud">
+          <div class="fly-hud-top">
+            <span id="flyHudTitle">🎬 3D 撤離路線演示中...</span>
+            <button style="background:#dc2626;border-color:#f87171;color:#fff;padding:2px 8px;font-size:11px;" onclick="stop3DRouteDemo()">⏹ 停止</button>
+          </div>
+          <div id="flyHudStep" class="fly-hud-step">正在規劃街道路徑...</div>
+          <div class="fly-progress-track"><div id="flyProgressBar" class="fly-progress-bar"></div></div>
+        </div>
+        <div class="map-hint" id="mapStatus">正在初始化 3D 地圖與 GPS...</div>
       </div>
     </div>
 
@@ -508,10 +629,17 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script>
-    let map, userMarker, routeLine;
-    let shelterLayer, sensorLayer, cctvLayer;
+    let map, userMarker, walkerMarker;
+    let mapReady = false;
+    let is3DEnabled = true;
+    let pendingRouteCoords = null;
+    let shelterMarkers = [];
+    let sensorMarkers = [];
+    let cctvMarkers = [];
+    let activeFlyRaf = null;
+    let activeFlyCancelled = false;
     let activeCctvTimer = null;
     let cctvFramesCache = {};
     let currentLat = 25.033964;
@@ -569,33 +697,134 @@
       return out.join("\n");
     }
 
-    function makeIcon(html, bg, size = 30) {
-      return L.divIcon({
-        className: "",
-        html: `<div class="custom-pin" style="width:${size}px;height:${size}px;background:${bg};font-size:${Math.round(size*0.48)}px;">${html}</div>`,
-        iconSize: [size, size],
-        iconAnchor: [size / 2, size / 2],
-      });
+    function makePinEl(html, bg, size = 30) {
+      const el = document.createElement("div");
+      el.className = "custom-pin";
+      el.style.width = `${size}px`;
+      el.style.height = `${size}px`;
+      el.style.background = bg;
+      el.style.fontSize = `${Math.round(size * 0.48)}px`;
+      el.textContent = html;
+      el.addEventListener("click", (ev) => ev.stopPropagation());
+      return el;
+    }
+
+    function toLngLat(lat, lon) {
+      return [Number(lon), Number(lat)];
+    }
+
+    function emptyLineGeoJson() {
+      return { type: "Feature", geometry: { type: "LineString", coordinates: [] }, properties: {} };
+    }
+
+    function setRouteLayers(previewLngLats, progressLngLats) {
+      if (!mapReady || !map) {
+        pendingRouteCoords = { preview: previewLngLats, progress: progressLngLats };
+        return;
+      }
+      const prevSrc = map.getSource("route-preview");
+      const progSrc = map.getSource("route-progress");
+      if (prevSrc) {
+        prevSrc.setData({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: previewLngLats || [] },
+          properties: {},
+        });
+      }
+      if (progSrc) {
+        progSrc.setData({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: progressLngLats || [] },
+          properties: {},
+        });
+      }
     }
 
     function initMap() {
-      map = L.map("map").setView([currentLat, currentLon], 14);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap contributors",
-      }).addTo(map);
-
-      shelterLayer = L.layerGroup().addTo(map);
-      sensorLayer = L.layerGroup().addTo(map);
-      cctvLayer = L.layerGroup().addTo(map);
-
-      map.on("popupclose", () => {
-        if (activeCctvTimer) { clearInterval(activeCctvTimer); activeCctvTimer = null; }
+      map = new maplibregl.Map({
+        container: "map",
+        style: "https://tiles.openfreemap.org/styles/liberty",
+        center: toLngLat(currentLat, currentLon),
+        zoom: 15.2,
+        pitch: 54,
+        bearing: -15,
+        antialias: true,
       });
+
+      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
+
+      map.on("load", () => {
+        mapReady = true;
+        map.addSource("route-preview", { type: "geojson", data: emptyLineGeoJson() });
+        map.addSource("route-progress", { type: "geojson", data: emptyLineGeoJson() });
+
+        map.addLayer({
+          id: "route-preview-line",
+          type: "line",
+          source: "route-preview",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": "#38bdf8",
+            "line-width": 4,
+            "line-opacity": 0.55,
+            "line-dasharray": [2, 1.5],
+          },
+        });
+
+        map.addLayer({
+          id: "route-progress-glow",
+          type: "line",
+          source: "route-progress",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": "#38bdf8",
+            "line-width": 14,
+            "line-opacity": 0.35,
+            "line-blur": 6,
+          },
+        });
+
+        map.addLayer({
+          id: "route-progress-line",
+          type: "line",
+          source: "route-progress",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": "#10b981",
+            "line-width": 5.5,
+            "line-opacity": 0.96,
+          },
+        });
+
+        if (pendingRouteCoords) {
+          setRouteLayers(pendingRouteCoords.preview, pendingRouteCoords.progress);
+          pendingRouteCoords = null;
+        }
+      });
+
+      map.on("dragstart", () => { if (activeFlyRaf) stop3DRouteDemo(true); });
+      map.on("wheel", () => { if (activeFlyRaf) stop3DRouteDemo(true); });
 
       map.on("click", (e) => {
-        setPosition(e.latlng.lat, e.latlng.lng, "已點擊地圖移動 GPS 座標");
+        stop3DRouteDemo();
+        setPosition(e.lngLat.lat, e.lngLat.lng, "已點擊 3D 地圖移動 GPS 座標");
       });
+    }
+
+    function toggle3DView() {
+      is3DEnabled = !is3DEnabled;
+      const btn = document.getElementById("btnToggle3D");
+      if (btn) {
+        btn.textContent = is3DEnabled ? "🏙️ 3D 視角：開" : "🗺️ 2D 平面視角";
+        btn.classList.toggle("active-3d", is3DEnabled);
+      }
+      if (map) {
+        map.easeTo({
+          pitch: is3DEnabled ? 56 : 0,
+          bearing: is3DEnabled ? -15 : 0,
+          duration: 650,
+        });
+      }
     }
 
     function updateModeTag() {
@@ -669,20 +898,38 @@
     }
 
     function setPosition(lat, lon, label) {
+      stop3DRouteDemo();
       currentLat = lat;
       currentLon = lon;
       document.getElementById("mapStatus").textContent = `${label} (${lat.toFixed(5)}, ${lon.toFixed(5)})`;
       if (!userMarker) {
-        userMarker = L.marker([lat, lon], { icon: makeIcon("我", "#2563eb", 34) }).addTo(map);
+        userMarker = new maplibregl.Marker({ element: makePinEl("我", "#2563eb", 34) })
+          .setLngLat(toLngLat(lat, lon))
+          .addTo(map);
       } else {
-        userMarker.setLatLng([lat, lon]);
+        userMarker.setLngLat(toLngLat(lat, lon));
       }
-      map.setView([lat, lon], 14);
+      if (map) {
+        map.flyTo({
+          center: toLngLat(lat, lon),
+          zoom: 15.2,
+          pitch: is3DEnabled ? 54 : 0,
+          duration: 800,
+        });
+      }
       refreshNearby();
+    }
+
+    function clearMarkerList(list) {
+      for (const m of list) {
+        if (m) m.remove();
+      }
+      list.length = 0;
     }
 
     function renderMapData(mapData) {
       if (!mapData) return;
+      stop3DRouteDemo();
       lastMapData = mapData;
       const u = mapData.user || {};
       lastPlaceName = u.place || "";
@@ -707,45 +954,55 @@
         weatherHeadline.textContent = (ow && ow.headline) || "暫時無法取得即時天氣資料";
         weatherTips.innerHTML = "";
       }
-      setTimeout(() => { if (map) map.invalidateSize(); }, 60);
+      setTimeout(() => { if (map) map.resize(); }, 80);
 
-      shelterLayer.clearLayers();
-      sensorLayer.clearLayers();
-      cctvLayer.clearLayers();
-      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+      clearMarkerList(shelterMarkers);
+      clearMarkerList(sensorMarkers);
+      clearMarkerList(cctvMarkers);
+      setRouteLayers([], []);
 
       const shelters = mapData.shelters || [];
-      const bounds = [[currentLat, currentLon]];
+      const bounds = new maplibregl.LngLatBounds();
+      bounds.extend(toLngLat(currentLat, currentLon));
 
       shelters.forEach((s, idx) => {
         if (!s["緯度"] || !s["經度"]) return;
         const isTop = idx === 0;
-        const marker = L.marker([s["緯度"], s["經度"]], {
-          icon: makeIcon(String(idx + 1), isTop ? "#10b981" : "#059669", isTop ? 32 : 26),
-        }).addTo(shelterLayer);
-        marker.bindPopup(
+        const popup = new maplibregl.Popup({ offset: 18, maxWidth: "300px" }).setHTML(
           `<b>#${idx + 1} ${escapeHtml(s["名稱"])}</b><br/>` +
           `${escapeHtml(s["距離與方位"] || "")}<br/>` +
           `地址：${escapeHtml(s["地址"] || "無")}<br/>` +
           `適用災害：${escapeHtml(s["適用災害類別"] || "")}｜容納 ${s["預計收容人數"] || 0} 人<br/>` +
-          `<a href="${s["google_maps_導航連結"]}" target="_blank" rel="noopener">🚶 開啟 Google Maps 步行導航</a>`
+          `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">` +
+            `<button class="popup-3d-btn" onclick="play3DRouteDemoByIndex(${idx})">🎬 3D 路線演示 (15秒)</button>` +
+            `<a href="${s["google_maps_導航連結"]}" target="_blank" rel="noopener" style="align-self:center;color:#2563eb;font-weight:700;">🚶 Google Maps</a>` +
+          `</div>`
         );
-        if (idx < 3) bounds.push([s["緯度"], s["經度"]]);
+        const marker = new maplibregl.Marker({
+          element: makePinEl(String(idx + 1), isTop ? "#10b981" : "#059669", isTop ? 32 : 26),
+        })
+          .setLngLat(toLngLat(s["緯度"], s["經度"]))
+          .setPopup(popup)
+          .addTo(map);
+        shelterMarkers[idx] = marker;
+        if (idx < 3) bounds.extend(toLngLat(s["緯度"], s["經度"]));
       });
 
       const sensors = mapData.flood_sensors || [];
       sensors.forEach((f) => {
         if (!f["緯度"] || !f["經度"]) return;
         const cm = f["淹水深度_cm"] ?? "?";
-        const m = L.marker([f["緯度"], f["經度"]], {
-          icon: makeIcon("💧", "#dc2626", 28),
-        }).addTo(sensorLayer);
-        m.bindPopup(
+        const popup = new maplibregl.Popup({ offset: 16, maxWidth: "260px" }).setHTML(
           `<b>💧 淹水感測器：${escapeHtml(f["測站名稱"])}</b><br/>` +
           `實測積水：<b style="color:#dc2626;">${cm} 公分</b><br/>` +
           `狀態：${escapeHtml(f["狀態"] || "")}<br/>` +
           `時間：${escapeHtml(f["觀測時間"] || "")}`
         );
+        const m = new maplibregl.Marker({ element: makePinEl("💧", "#dc2626", 28) })
+          .setLngLat(toLngLat(f["緯度"], f["經度"]))
+          .setPopup(popup)
+          .addTo(map);
+        sensorMarkers.push(m);
       });
 
       const cctvs = mapData.cctvs || [];
@@ -760,10 +1017,6 @@
         };
         const st = styleMap[cam.category] || { icon: "📹", color: "#7c3aed" };
         const safeDomId = String(cam.id).replace(/[^a-zA-Z0-9_-]/g, "_");
-        const m = L.marker([cam.lat, cam.lon], {
-          icon: makeIcon(st.icon, st.color, 26),
-        }).addTo(cctvLayer);
-
         const extraLoc = cam.basin ? `｜流域：${escapeHtml(cam.basin)}` : (cam.location_desc ? `｜${escapeHtml(cam.location_desc)}` : "");
         const popupHtml = `
           <div class="cctv-viewer">
@@ -776,27 +1029,35 @@
             <div id="cctv-ctrl-${safeDomId}" class="cctv-controls"></div>
           </div>
         `;
-        m.bindPopup(popupHtml, { maxWidth: 320, minWidth: 280 });
-        m.on("popupopen", () => loadCctvInPopup(cam, safeDomId));
+        const popup = new maplibregl.Popup({ offset: 16, maxWidth: "330px" }).setHTML(popupHtml);
+        popup.on("open", () => setTimeout(() => loadCctvInPopup(cam, safeDomId), 30));
+        popup.on("close", () => stopCctvTimelapse());
+
+        const m = new maplibregl.Marker({ element: makePinEl(st.icon, st.color, 26) })
+          .setLngLat(toLngLat(cam.lat, cam.lon))
+          .setPopup(popup)
+          .addTo(map);
+        cctvMarkers.push(m);
       });
       toggleCctvLayer();
 
       const route = mapData.primary_route;
       if (route && Array.isArray(route.route_coords) && route.route_coords.length >= 2) {
-        routeLine = L.polyline(route.route_coords, {
-          color: "#38bdf8",
-          weight: 5,
-          opacity: 0.9,
-          dashArray: "8, 6",
-        }).addTo(map);
+        const lngLats = route.route_coords.map((pt) => [Number(pt[1]), Number(pt[0])]);
+        setRouteLayers(lngLats, lngLats);
         document.getElementById("routeSummary").textContent =
           `首選 ${route.route_distance_text} · 步行約 ${route.estimated_minutes} 分鐘`;
       } else {
         document.getElementById("routeSummary").textContent = `找到 ${shelters.length} 處`;
       }
 
-      if (bounds.length > 1) {
-        map.fitBounds(bounds, { padding: [45, 45], maxZoom: 15 });
+      if (shelters.length > 0 && map) {
+        map.fitBounds(bounds, {
+          padding: { top: 65, bottom: 55, left: 45, right: 45 },
+          maxZoom: 15.8,
+          pitch: is3DEnabled ? 54 : 0,
+          duration: 700,
+        });
       }
 
       const listEl = document.getElementById("shelterList");
@@ -804,7 +1065,7 @@
         listEl.innerHTML = "查無附近避難收容處所。";
         return;
       }
-      listEl.innerHTML = shelters.slice(0, 3).map((s, idx) => {
+      listEl.innerHTML = shelters.slice(0, 5).map((s, idx) => {
         const walkUrl = (idx === 0 && route && route.google_maps_walking_url) ? route.google_maps_walking_url : s["google_maps_導航連結"];
         const driveUrl = (idx === 0 && route && route.google_maps_driving_url) ? route.google_maps_driving_url : "";
         return `
@@ -818,8 +1079,9 @@
               ${s["管理人電話"] ? `｜☎️ ${escapeHtml(s["管理人電話"])}` : ""}
             </div>
             <div class="nav-links">
-              ${walkUrl ? `<a href="${walkUrl}" target="_blank" rel="noopener">🚶 Google Maps 步行導航</a>` : ""}
-              ${driveUrl ? `<a href="${driveUrl}" target="_blank" rel="noopener">🚗 Google Maps 開車導航</a>` : ""}
+              <button class="btn-3d-mini" onclick="play3DRouteDemoByIndex(${idx})">🎬 3D 路線演示 (15秒)</button>
+              ${walkUrl ? `<a href="${walkUrl}" target="_blank" rel="noopener">🚶 Google Maps 步行</a>` : ""}
+              ${driveUrl ? `<a href="${driveUrl}" target="_blank" rel="noopener">🚗 開車導航</a>` : ""}
             </div>
           </div>
         `;
@@ -828,12 +1090,234 @@
 
     function toggleCctvLayer() {
       const cb = document.getElementById("toggleCctv");
-      if (!cb || !map || !cctvLayer) return;
-      if (cb.checked) {
-        if (!map.hasLayer(cctvLayer)) map.addLayer(cctvLayer);
-      } else {
-        if (map.hasLayer(cctvLayer)) map.removeLayer(cctvLayer);
+      if (!cb) return;
+      const show = cb.checked;
+      for (const m of cctvMarkers) {
+        m.getElement().style.display = show ? "flex" : "none";
       }
+    }
+
+    // ---------- 3D 撤離路線飛行演示引擎（12~16 秒流暢街道跟拍） ----------
+    function haversineM(a, b) {
+      const R = 6371000;
+      const toRad = (d) => (d * Math.PI) / 180;
+      const dLat = toRad(b[1] - a[1]);
+      const dLon = toRad(b[0] - a[0]);
+      const lat1 = toRad(a[1]);
+      const lat2 = toRad(b[1]);
+      const x = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+      return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+    }
+
+    function bearingDeg(a, b) {
+      const toRad = (d) => (d * Math.PI) / 180;
+      const lat1 = toRad(a[1]), lat2 = toRad(b[1]);
+      const dLon = toRad(b[0] - a[0]);
+      const y = Math.sin(dLon) * Math.cos(lat2);
+      const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+      return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+    }
+
+    function lerpAngle(a, b, t) {
+      let diff = ((b - a + 540) % 360) - 180;
+      return (a + diff * t + 360) % 360;
+    }
+
+    function densifyLngLats(coords) {
+      if (coords.length < 2) return coords;
+      const out = [coords[0]];
+      for (let i = 1; i < coords.length; i++) {
+        const a = coords[i - 1], b = coords[i];
+        const dist = haversineM(a, b);
+        const segs = Math.max(1, Math.min(40, Math.ceil(dist / 25)));
+        for (let s = 1; s <= segs; s++) {
+          const f = s / segs;
+          out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+        }
+      }
+      return out;
+    }
+
+    function stop3DRouteDemo(keepCamera = false) {
+      activeFlyCancelled = true;
+      if (activeFlyRaf) {
+        cancelAnimationFrame(activeFlyRaf);
+        activeFlyRaf = null;
+      }
+      if (walkerMarker) {
+        walkerMarker.remove();
+        walkerMarker = null;
+      }
+      const hud = document.getElementById("flyHud");
+      if (hud) hud.style.display = "none";
+      if (!keepCamera && lastMapData && lastMapData.primary_route && lastMapData.primary_route.route_coords) {
+        const lngLats = lastMapData.primary_route.route_coords.map((pt) => [Number(pt[1]), Number(pt[0])]);
+        setRouteLayers(lngLats, lngLats);
+      }
+    }
+
+    async function play3DRouteDemoByIndex(idx) {
+      if (!lastMapData || !lastMapData.shelters || !lastMapData.shelters[idx]) return;
+      const shelter = lastMapData.shelters[idx];
+      if (!shelter["緯度"] || !shelter["經度"]) return;
+
+      stop3DRouteDemo(true);
+      activeFlyCancelled = false;
+
+      // 確保切回 3D 視角並捲動到地圖
+      if (!is3DEnabled) toggle3DView();
+      document.getElementById("mapWrap")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+      const hud = document.getElementById("flyHud");
+      const hudTitle = document.getElementById("flyHudTitle");
+      const hudStep = document.getElementById("flyHudStep");
+      const progBar = document.getElementById("flyProgressBar");
+      hud.style.display = "block";
+      hudTitle.textContent = `🎬 3D 撤離路線演示｜前往 ${shelter["名稱"]}`;
+      hudStep.textContent = "正在計算真實街道路徑與 3D 鏡頭軌跡...";
+      progBar.style.width = "0%";
+
+      // 關閉其他打開中的彈窗
+      for (const m of shelterMarkers) {
+        if (!m) continue;
+        const p = m.getPopup();
+        if (p && p.isOpen()) p.remove();
+      }
+
+      let route = (idx === 0 && lastMapData.primary_route && lastMapData.primary_route.route_coords)
+        ? lastMapData.primary_route
+        : null;
+
+      if (!route) {
+        try {
+          const res = await fetch("/api/route", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              origin_lat: currentLat,
+              origin_lon: currentLon,
+              dest_lat: shelter["緯度"],
+              dest_lon: shelter["經度"],
+              dest_name: shelter["名稱"],
+              travel_mode: "walking",
+            }),
+          });
+          route = await res.json();
+        } catch (e) {
+          hudStep.textContent = "無法取得街道折線，改以直線 3D 演示";
+        }
+      }
+      if (activeFlyCancelled) return;
+
+      const rawCoords = (route && Array.isArray(route.route_coords) && route.route_coords.length >= 2)
+        ? route.route_coords.map((pt) => [Number(pt[1]), Number(pt[0])])
+        : [toLngLat(currentLat, currentLon), toLngLat(shelter["緯度"], shelter["經度"])];
+
+      const dense = densifyLngLats(rawCoords);
+      const cumDist = [0];
+      for (let i = 1; i < dense.length; i++) {
+        cumDist.push(cumDist[i - 1] + haversineM(dense[i - 1], dense[i]));
+      }
+      const totalM = Math.max(1, cumDist[cumDist.length - 1]);
+      const steps = (route && Array.isArray(route.steps) && route.steps.length)
+        ? route.steps
+        : [`前往 ${shelter["名稱"]}（${shelter["距離與方位"] || ""}）`];
+
+      // 顯示整條半透明預覽路徑，進度線從 0 開始動態繪製
+      setRouteLayers(dense, [dense[0]]);
+
+      const walkerEl = document.createElement("div");
+      walkerEl.className = "walker-pin";
+      walkerEl.textContent = "🚶";
+      walkerMarker = new maplibregl.Marker({ element: walkerEl }).setLngLat(dense[0]).addTo(map);
+
+      const initBearing = dense.length >= 2 ? bearingDeg(dense[0], dense[Math.min(3, dense.length - 1)]) : 0;
+      const durationMs = Math.max(11500, Math.min(16500, Math.round(10500 + totalM * 3)));
+
+      // 先平順切入起點 3D 街道跟拍視角
+      map.flyTo({
+        center: dense[0],
+        zoom: 17.1,
+        pitch: 65,
+        bearing: initBearing,
+        duration: 1100,
+      });
+
+      await new Promise((r) => setTimeout(r, 1150));
+      if (activeFlyCancelled) return;
+
+      let smoothBearing = initBearing;
+      const startTime = performance.now();
+
+      function tick(now) {
+        if (activeFlyCancelled) return;
+        const rawT = Math.min(1, (now - startTime) / durationMs);
+        // 平緩起步與收尾（easeInOutSine）
+        const eased = 0.5 - 0.5 * Math.cos(Math.PI * rawT);
+        const targetD = eased * totalM;
+
+        let segIdx = 0;
+        while (segIdx < cumDist.length - 2 && cumDist[segIdx + 1] < targetD) {
+          segIdx++;
+        }
+        const segLen = Math.max(0.001, cumDist[segIdx + 1] - cumDist[segIdx]);
+        const frac = Math.max(0, Math.min(1, (targetD - cumDist[segIdx]) / segLen));
+        const curPt = [
+          dense[segIdx][0] + (dense[segIdx + 1][0] - dense[segIdx][0]) * frac,
+          dense[segIdx][1] + (dense[segIdx + 1][1] - dense[segIdx][1]) * frac,
+        ];
+
+        // 向前看 3 個點計算平順前進方位，避免轉角鏡頭抖動
+        const lookIdx = Math.min(dense.length - 1, segIdx + 3);
+        if (haversineM(curPt, dense[lookIdx]) > 3) {
+          const targetBearing = bearingDeg(curPt, dense[lookIdx]);
+          smoothBearing = lerpAngle(smoothBearing, targetBearing, 0.08);
+        }
+
+        const drawn = dense.slice(0, segIdx + 1);
+        drawn.push(curPt);
+        setRouteLayers(dense, drawn);
+        if (walkerMarker) walkerMarker.setLngLat(curPt);
+
+        map.jumpTo({
+          center: curPt,
+          bearing: smoothBearing,
+          pitch: 65,
+          zoom: 17.1,
+        });
+
+        const stepIdx = Math.min(steps.length - 1, Math.floor(eased * steps.length));
+        const pct = Math.round(rawT * 100);
+        const coveredText = targetD < 1000 ? `${Math.round(targetD)}m` : `${(targetD / 1000).toFixed(2)}km`;
+        const totalText = totalM < 1000 ? `${Math.round(totalM)}m` : `${(totalM / 1000).toFixed(2)}km`;
+        hudStep.textContent = `📍 ${steps[stepIdx]}（已行進 ${coveredText} / ${totalText}）`;
+        progBar.style.width = `${pct}%`;
+
+        if (rawT < 1) {
+          activeFlyRaf = requestAnimationFrame(tick);
+        } else {
+          activeFlyRaf = null;
+          hudTitle.textContent = `✅ 已抵達避難所：${shelter["名稱"]}`;
+          hudStep.textContent = `全程 ${route?.route_distance_text || totalText} · 步行約 ${route?.estimated_minutes || "?"} 分鐘（可拖曳旋轉檢視 3D 周邊建物）`;
+          progBar.style.width = "100%";
+
+          map.easeTo({
+            center: toLngLat(shelter["緯度"], shelter["經度"]),
+            zoom: 16.2,
+            pitch: 54,
+            bearing: (smoothBearing + 35) % 360,
+            duration: 1300,
+          });
+          setTimeout(() => {
+            if (!activeFlyCancelled && shelterMarkers[idx]) {
+              const p = shelterMarkers[idx].getPopup();
+              if (!p || !p.isOpen()) shelterMarkers[idx].togglePopup();
+            }
+          }, 900);
+        }
+      }
+
+      activeFlyRaf = requestAnimationFrame(tick);
     }
 
     function stopCctvTimelapse() {
